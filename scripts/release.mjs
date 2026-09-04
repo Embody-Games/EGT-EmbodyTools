@@ -197,8 +197,12 @@ try {
 	die(`push failed:\n${detail}`);
 }
 // Pushing to a URL does not move refs/remotes/origin/main, and without this the
-// clone keeps looking "ahead" in GitHub Desktop.
-try { run('git', ['fetch', 'origin']); } catch { /* not fatal */ }
+// clone keeps looking "ahead" in GitHub Desktop. This repo is private and the bridge
+// shell has no credential helper, so the fetch needs the token as well.
+try {
+	run('git', ['fetch', `https://x-access-token:${token}@github.com/${REPO}.git`,
+		'+refs/heads/*:refs/remotes/origin/*'], { stdio: 'pipe' });
+} catch { /* not fatal */ }
 sweepLocks();
 
 console.log(`\npushed. The tag is what publishes the release:`);

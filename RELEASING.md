@@ -47,11 +47,15 @@ working copy, untracked, so it can never be committed or pushed.
 
 ```sh
 TOKEN=$(tr -d '\r\n' < .git/egt-push-token)
-git push --follow-tags "https://x-access-token:$TOKEN@github.com/Embody-Games/EGT-EmbodyTools.git" main
-git fetch origin      # pushing to a URL does not move refs/remotes/origin/main
+REMOTE="https://x-access-token:$TOKEN@github.com/Embody-Games/EGT-EmbodyTools.git"
+git push --follow-tags "$REMOTE" main
+git fetch "$REMOTE" "+refs/heads/*:refs/remotes/origin/*"
 ```
 
-Without that fetch the clone keeps looking "ahead" in GitHub Desktop. Never write the token
+Pushing to a URL does not move `refs/remotes/origin/main`, and without that fetch the clone
+keeps looking "ahead" in GitHub Desktop. The fetch needs the token too: this repo is private
+and the bridge shell has no credential helper, so a plain `git fetch origin` there fails with
+`could not read Username for 'https://github.com'`. Never write the token
 into `.git/config`, a tracked file, a project doc or memory. Tokens are per repository and
 `.git` is per clone, so on any other computer the file will not be there: ask David for it or
 leave the push to him with `--no-push`. Do not invent another credential path.
