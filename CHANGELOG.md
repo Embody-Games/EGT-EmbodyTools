@@ -2,6 +2,21 @@
 
 Generated from `changelog.json` by `scripts/changelog.mjs`. Edit that file, not this one.
 
+## v1.1.0 - Delta Layers and UnLeaky Layers
+
+_2026-09-05_
+
+### Changed
+
+- The layer sidecar tool is now Delta Layers, at its 1.5.1 behaviour, and the paint tool is UnLeaky Layers, at its 1.2.1. Same tools, new names, and both keep their place in Settings.
+- Delta Layers renamed its settings, so 'persist texture layers' and 'reload layer images' are now delta_layers_persist and delta_layers_watch. Those two default to on, so the only thing lost is a deliberate off. UnLeaky Layers and Anchored Stretch keep the setting ids they had.
+- The texture right-click entries are now Save, Reload and Delete Delta Layers, under new ids, so a keybind set on the old ones needs setting again.
+
+### Safeguards
+
+- The warning about an older copy still being installed now knows all six names these tools have gone by, so it fires whichever one you have.
+- Delta Layers renamed the marker that stops two copies wrapping the same codec twice, which would make every save write its sidecars twice. The bundle keeps the original name, so it still recognises an older layer plugin.
+
 ## v1.0.2 - New icon
 
 _2026-09-05_

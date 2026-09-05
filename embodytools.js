@@ -5,26 +5,26 @@
  * Three tools that used to be three separate plugins, in one file so there is one
  * thing to hand out and one version to talk about.
  *
- *   1. TEXTURE LAYERS      Keeps a texture's layer stack alive across a save/reload
+ *   1. DELTA LAYERS        Keeps a texture's layer stack alive across a save/reload
  *                          for formats that cannot store layers, by writing a sidecar
  *                          next to the texture PNG. Desktop only.
- *                          Settings > Export.   Was: embodygames_texture_layer_bridge 1.3.0
+ *                          Settings > Export.   Was: delta_layers 1.5.1
  *
  *   2. ANCHORED STRETCH    Makes the Stretch tool move only the face you drag, stops
  *                          resizing a stretched cube from creeping outward on the
  *                          anchored side, and adds a Stretch mode to Vertex Snap.
  *                          Settings > Edit.     Was: anchored_stretch 1.7.2
  *
- *   3. LAYERED LOCK ALPHA  Makes Lock Alpha Channel look at every layer, so you can
+ *   3. UNLEAKY LAYERS      Makes Lock Alpha Channel look at every layer, so you can
  *                          paint on an empty layer above your artwork.
- *                          Settings > Paint.    Was: layered_lock_alpha 1.1.0
+ *                          Settings > Paint.    Was: unleakylayers 1.2.1
  *                          Written by quinten.bench.
  *
  * HOW THE FILE IS LAID OUT
  * ------------------------
  * A short shared prelude, then one section per tool, each opened by a banner like
  *
- *     // ===== 1/3  TEXTURE LAYERS =====
+ *     // ===== 1/3  DELTA LAYERS =====
  *
  * so they are easy to jump between and easy to tell apart. Every section is its own
  * closure and shares nothing with the others but the prelude, which is why all three
@@ -52,7 +52,7 @@
 
 // Must match the filename: embodytools.js
 const PLUGIN_ID = 'embodytools';
-const PLUGIN_VERSION = '1.0.2';
+const PLUGIN_VERSION = '1.1.0';
 
 // The plugin icon, embedded so this stays a single file wherever it is loaded from;
 // Blockbench's getIconNode takes any data:image/ URL. The art is embody_tools_icon.png
@@ -67,7 +67,7 @@ const requireModule =
 	(typeof requireNativeModule === 'function') ? requireNativeModule :
 	(typeof require === 'function') ? require : null;
 // ===========================================================================
-// ===== 1/3  TEXTURE LAYERS =================================================
+// ===== 1/3  DELTA LAYERS ===================================================
 // ===========================================================================
 /*
  * Keeps a texture's layer stack (per-layer image + blend mode + opacity + offset +
@@ -89,10 +89,10 @@ const requireModule =
  *
  * Desktop app only - the whole approach needs real filesystem access.
  */
-const TextureLayersModule = (function () {
+const DeltaLayersModule = (function () {
 	const SIDECAR_VERSION = 3; // v3 adds layer groups (type/parent/folded); v1 and v2 still load
-	const SETTING_ID = 'embodygames_persist_texture_layers';
-	const WATCH_SETTING_ID = 'embodygames_watch_layer_files';
+	const SETTING_ID = 'delta_layers_persist';
+	const WATCH_SETTING_ID = 'delta_layers_watch';
 	const TAG = '[embodytools/layers]';
 
 	// ---------------------------------------------------------------------------
@@ -405,11 +405,11 @@ const TextureLayersModule = (function () {
 		// access denied, layer PNGs missing, user kept an external edit), the sidecar is not
 		// ours to delete.
 		if (!fs.existsSync(paths.json)) return;
-		if (texture.__layer_bridge_state === 'applied' || texture.__layer_bridge_state === 'absent') {
+		if (texture.__delta_layers_state === 'applied' || texture.__delta_layers_state === 'absent') {
 			log('layers no longer present on "' + texture.name + '" - removing its sidecar');
 			stopLayerWatcher(texture);
 			removeSidecar(paths);
-			texture.__layer_bridge_state = 'absent';
+			texture.__delta_layers_state = 'absent';
 		} else {
 			warn('"' + texture.name + '" has a layer sidecar that was never applied this session - '
 				+ 'leaving it alone rather than overwriting or deleting it');
@@ -622,7 +622,7 @@ const TextureLayersModule = (function () {
 		} catch (error) { /* unreadable: write it */ }
 		if (json_changed) fs.writeFileSync(paths.json, json, 'utf-8');
 
-		texture.__layer_bridge_state = 'applied';
+		texture.__delta_layers_state = 'applied';
 		startLayerWatcher(texture, paths);
 
 		if (files_written || json_changed) {
@@ -693,16 +693,16 @@ const TextureLayersModule = (function () {
 	}
 
 	function considerTexture(texture) {
-		if (!bridgeEnabled() || !texture || texture.__layer_bridge_state) return;
+		if (!bridgeEnabled() || !texture || texture.__delta_layers_state) return;
 		if (!texture.path || !PathModule.isAbsolute(texture.path)) return;
 		// Somebody else already owns this stack - a .bbmodel carries its layers itself.
 		if (texture.layers_enabled && texture.layers.length) {
-			texture.__layer_bridge_state = 'external';
+			texture.__delta_layers_state = 'external';
 			return;
 		}
 		if (!projectUsesBridge()) return;
 
-		texture.__layer_bridge_state = 'checking';
+		texture.__delta_layers_state = 'checking';
 		// Deferred on purpose: 'add_texture' fires in the middle of the codec's own parse()
 		// run, and we would rather not ask for file access - or touch the texture - while
 		// that is still going.
@@ -711,7 +711,7 @@ const TextureLayersModule = (function () {
 				checkTextureForSidecar(texture);
 			} catch (error) {
 				fail('could not check layers for "' + texture.name + '"', error);
-				texture.__layer_bridge_state = 'skipped';
+				texture.__delta_layers_state = 'skipped';
 			}
 		}, 0);
 	}
@@ -719,15 +719,15 @@ const TextureLayersModule = (function () {
 	function checkTextureForSidecar(texture) {
 		const fs = getFS(true);
 		if (!fs) {
-			texture.__layer_bridge_state = 'skipped';
+			texture.__delta_layers_state = 'skipped';
 			return;
 		}
 		const paths = sidecarPathsFor(texture);
 		if (!fs.existsSync(paths.json)) {
-			texture.__layer_bridge_state = 'absent';
+			texture.__delta_layers_state = 'absent';
 			return;
 		}
-		texture.__layer_bridge_state = 'pending';
+		texture.__delta_layers_state = 'pending';
 		whenTextureReady(texture, () => restoreFromSidecar(texture, paths));
 	}
 
@@ -779,7 +779,7 @@ const TextureLayersModule = (function () {
 	function restoreFromSidecar(texture, paths, force) {
 		const sidecar = readSidecar(paths);
 		if (!sidecar) {
-			texture.__layer_bridge_state = 'skipped';
+			texture.__delta_layers_state = 'skipped';
 			return;
 		}
 
@@ -804,7 +804,7 @@ const TextureLayersModule = (function () {
 	 * another program. Reapplying the old stack would silently discard that, so ask.
 	 */
 	function promptStaleSidecar(texture, sidecar, paths) {
-		texture.__layer_bridge_state = 'skipped';
+		texture.__delta_layers_state = 'skipped';
 		Blockbench.showMessageBox({
 			title: 'Texture changed outside Blockbench',
 			icon: 'layers',
@@ -938,7 +938,7 @@ const TextureLayersModule = (function () {
 				const layers = built.filter(Boolean);
 				if (!layers.length) {
 					warn('none of the layers for "' + texture.name + '" could be restored');
-					texture.__layer_bridge_state = 'skipped';
+					texture.__delta_layers_state = 'skipped';
 					return;
 				}
 
@@ -984,7 +984,7 @@ const TextureLayersModule = (function () {
 			})
 			.catch((error) => {
 				fail('could not restore layers for "' + texture.name + '"', error);
-				texture.__layer_bridge_state = 'skipped';
+				texture.__delta_layers_state = 'skipped';
 			});
 	}
 
@@ -1032,7 +1032,7 @@ const TextureLayersModule = (function () {
 
 		texture.saved = force_dirty ? false : texture_was_saved;
 		if (project_was_saved !== undefined) Project.saved = project_was_saved;
-		texture.__layer_bridge_state = 'applied';
+		texture.__delta_layers_state = 'applied';
 		startLayerWatcher(texture, sidecarPathsFor(texture));
 
 		if (typeof updateInterfacePanels === 'function') updateInterfacePanels();
@@ -1211,8 +1211,8 @@ const TextureLayersModule = (function () {
 		if (typeof codec.write !== 'function' || typeof codec.parse !== 'function') return;
 
 		codec.__layer_bridge_wrapped = true;
-		codec.__layer_bridge_write = codec.write;
-		codec.__layer_bridge_parse = codec.parse;
+		codec.__delta_layers_write = codec.write;
+		codec.__delta_layers_parse = codec.parse;
 		wrapped_codecs.push(codec);
 
 		const original_write = codec.write;
@@ -1258,10 +1258,10 @@ const TextureLayersModule = (function () {
 	function unwrapAllCodecs() {
 		for (const codec of wrapped_codecs) {
 			try {
-				if (codec.__layer_bridge_write) codec.write = codec.__layer_bridge_write;
-				if (codec.__layer_bridge_parse) codec.parse = codec.__layer_bridge_parse;
-				delete codec.__layer_bridge_write;
-				delete codec.__layer_bridge_parse;
+				if (codec.__delta_layers_write) codec.write = codec.__delta_layers_write;
+				if (codec.__delta_layers_parse) codec.parse = codec.__delta_layers_parse;
+				delete codec.__delta_layers_write;
+				delete codec.__delta_layers_parse;
 				delete codec.__layer_bridge_wrapped;
 			} catch (error) {
 				fail('could not unhook a codec', error);
@@ -1279,8 +1279,8 @@ const TextureLayersModule = (function () {
 	}
 
 	function setupActions() {
-		const save_action = new Action('embodygames_save_texture_layers', {
-			name: 'Save Texture Layers Now',
+		const save_action = new Action('delta_layers_save', {
+			name: 'Save Delta Layers Now',
 			description: 'Write this texture\'s layer stack to its sidecar file straight away',
 			icon: 'save',
 			category: 'textures',
@@ -1303,8 +1303,8 @@ const TextureLayersModule = (function () {
 			},
 		});
 
-		const reload_action = new Action('embodygames_reload_texture_layers', {
-			name: 'Reload Texture Layers From Disk',
+		const reload_action = new Action('delta_layers_reload', {
+			name: 'Reload Delta Layers From Disk',
 			description: 'Rebuild this texture\'s layer stack from its sidecar file, ignoring the staleness check',
 			icon: 'layers',
 			category: 'textures',
@@ -1326,8 +1326,8 @@ const TextureLayersModule = (function () {
 			},
 		});
 
-		const forget_action = new Action('embodygames_delete_texture_layers', {
-			name: 'Delete Saved Texture Layers',
+		const forget_action = new Action('delta_layers_delete', {
+			name: 'Delete Saved Delta Layers',
 			description: 'Remove this texture\'s sidecar file and its per-layer images',
 			icon: 'delete',
 			category: 'textures',
@@ -1355,7 +1355,7 @@ const TextureLayersModule = (function () {
 				}, (button) => {
 					if (button !== 0) return;
 					removeSidecar(sidecarPathsFor(texture));
-					texture.__layer_bridge_state = 'absent';
+					texture.__delta_layers_state = 'absent';
 					Blockbench.showQuickMessage('Deleted saved layers for ' + texture.name, 1600);
 				});
 			},
@@ -1385,14 +1385,13 @@ const TextureLayersModule = (function () {
 		menu_entries = [];
 	}
 
-
 	// -----------------------------------------------------------------------
 	// module interface
 	// -----------------------------------------------------------------------
 
 	return {
-		id: 'texture_layers',
-		title: 'Texture Layers',
+		id: 'delta_layers',
+		title: 'Delta Layers',
 		settings: [SETTING_ID, WATCH_SETTING_ID],
 
 		blocked() {
@@ -1405,7 +1404,7 @@ const TextureLayersModule = (function () {
 
 		load() {
 			new Setting(SETTING_ID, {
-				name: 'Persist texture layers',
+				name: 'Delta Layers: persist texture layers',
 				description: 'Save each texture\'s layer stack to a sidecar file on export, and restore it on load, '
 					+ 'for formats that cannot store layers themselves.',
 				category: 'export',
@@ -1415,7 +1414,7 @@ const TextureLayersModule = (function () {
 			deletables.push(settings[SETTING_ID]);
 
 			new Setting(WATCH_SETTING_ID, {
-				name: 'Reload layer images edited outside Blockbench',
+				name: 'Delta Layers: reload layer images edited outside Blockbench',
 				description: 'Watch each texture\'s .layers folder and reload a layer as soon as another '
 					+ 'program saves over its PNG, the way Blockbench does for unlayered textures.',
 				category: 'export',
@@ -2155,7 +2154,7 @@ const AnchoredStretchModule = (function () {
 
 })();
 // ===========================================================================
-// ===== 3/3  LAYERED LOCK ALPHA =============================================
+// ===== 3/3  UNLEAKY LAYERS =================================================
 // ===========================================================================
 /*
  * Written by quinten.bench.
@@ -2193,8 +2192,8 @@ const AnchoredStretchModule = (function () {
  * Step 3 runs on the small region passed to putImageData for brush-like tools, and on
  * the whole layer for the tools that redraw wholesale (fill / shape / gradient).
  */
-const LayeredLockAlphaModule = (function () {
-	const LOG = '[embodytools/lock-alpha]';
+const UnLeakyLayersModule = (function () {
+	const LOG = '[embodytools/unleaky]';
 
 	const MUTATORS = ['fill', 'fillRect', 'stroke', 'strokeRect', 'clearRect', 'drawImage'];
 
@@ -2478,8 +2477,8 @@ const LayeredLockAlphaModule = (function () {
 	// -----------------------------------------------------------------------
 
 	return {
-		id: 'layered_lock_alpha',
-		title: 'Layered Lock Alpha',
+		id: 'unleakylayers',
+		title: 'UnLeaky Layers',
 		settings: ['lla_enabled', 'lla_clamp', 'lla_allow_erase', 'lla_include_hidden'],
 
 		blocked() {
@@ -2499,7 +2498,7 @@ const LayeredLockAlphaModule = (function () {
 				category: 'paint',
 				value: true,
 				plugin: PLUGIN_ID,
-				name: 'Layer-aware Lock Alpha',
+				name: 'UnLeaky Layers',
 				description: 'Lock Alpha Channel locks a pixel only when it is fully transparent on every layer, instead of only on the layer being painted.'
 			}));
 			added_settings.push(new Setting('lla_clamp', {
@@ -2623,20 +2622,22 @@ const LayeredLockAlphaModule = (function () {
  * it.
  */
 
-const MODULES = [TextureLayersModule, AnchoredStretchModule, LayeredLockAlphaModule];
+const MODULES = [DeltaLayersModule, AnchoredStretchModule, UnLeakyLayersModule];
 
 // The plugins each module used to be, for the "you still have the old one installed"
 // warning below. Anchored Stretch has two: it was called One-Sided Stretch before, and
 // that older one patches the same stretch tool under different setting ids.
 const REPLACES = {
-	texture_layers: [
+	delta_layers: [
+		{ id: 'delta_layers', name: 'Delta Layers' },
 		{ id: 'embodygames_texture_layer_bridge', name: 'Embody Games Texture Layers' },
 	],
 	anchored_stretch: [
 		{ id: 'anchored_stretch', name: 'Anchored Stretch' },
 		{ id: 'one_sided_stretch', name: 'One-Sided Stretch' },
 	],
-	layered_lock_alpha: [
+	unleakylayers: [
+		{ id: 'unleakylayers', name: 'UnLeaky Layers' },
 		{ id: 'layered_lock_alpha', name: 'Layered Lock Alpha' },
 	],
 };
@@ -2713,7 +2714,7 @@ BBPlugin.register(PLUGIN_ID, {
 	about: [
 		'Three tools that used to be three plugins. Each one can be turned off on its own, and each keeps its settings where you would look for it.',
 		'',
-		'## Texture Layers (Settings > Export)',
+		'## Delta Layers (Settings > Export)',
 		'',
 		'Keeps a texture\'s layer stack (image, blend mode, opacity, offset, visibility, order, and 5.2 layer groups) alive across a save and reload for formats whose file has no concept of layers, such as Hytale\'s `.blockymodel`. The model file is never touched: the stack goes in a sidecar next to the texture PNG, `Texture.layers.json` plus a `Texture.layers/` folder with one PNG per layer. Anything that only cares about the model plus flat texture never sees it.',
 		'',
@@ -2734,7 +2735,7 @@ BBPlugin.register(PLUGIN_ID, {
 		'- It also fixes the other half of the problem: **resizing** a cube that already has stretch moves the anchored face too, because Blockbench applies the size change to from/to without accounting for the stretch multiplier. The anchored face is now put back where it was, on the gizmo, the size sliders and keyboard nudges alike.',
 		'- Only active in formats that support cube stretching, such as the Hytale formats.',
 		'',
-		'## Layered Lock Alpha (Settings > Paint)',
+		'## UnLeaky Layers (Settings > Paint)',
 		'',
 		'Lock Alpha Channel only looks at the layer you are painting on, so on a fresh layer above your artwork everything is locked and the brush does nothing. This makes it consider the combined alpha of every layer: a pixel is locked only when it is transparent on all of them, and strokes are clipped to the combined silhouette.',
 		'',
