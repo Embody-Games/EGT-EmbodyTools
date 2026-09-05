@@ -146,6 +146,16 @@ const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
 pkg.version = version;
 writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf8');
 
+// npm writes the version into the lockfile in two places. Without this the lockfile
+// drifts behind package.json, which it had done since 1.0.0.
+const lockPath = join(root, 'package-lock.json');
+if (existsSync(lockPath)) {
+	const lock = JSON.parse(readFileSync(lockPath, 'utf8'));
+	lock.version = version;
+	if (lock.packages?.['']) lock.packages[''].version = version;
+	writeFileSync(lockPath, JSON.stringify(lock, null, 2) + '\n', 'utf8');
+}
+
 writeFileSync(join(root, 'changelog.json'), JSON.stringify(merged, null, 2) + '\n', 'utf8');
 writeMarkdown(merged);
 
@@ -175,7 +185,7 @@ const sweepLocks = () => {
 };
 
 sweepLocks();
-run('git', ['add', 'embodytools.js', 'package.json', 'changelog.json', 'CHANGELOG.md',
+run('git', ['add', 'embodytools.js', 'package.json', 'package-lock.json', 'changelog.json', 'CHANGELOG.md',
 	'embody_tools_icon.png']);
 run('git', ['commit', '-m', `v${version}: ${title}`]);
 run('git', ['tag', '-a', `v${version}`, '-m', `v${version}: ${title}`]);
