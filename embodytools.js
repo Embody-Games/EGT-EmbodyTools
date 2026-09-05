@@ -13,7 +13,7 @@
  *   2. ANCHORED STRETCH    Makes the Stretch tool move only the face you drag, stops
  *                          resizing a stretched cube from creeping outward on the
  *                          anchored side, and adds a Stretch mode to Vertex Snap.
- *                          Settings > Edit.     Was: anchored_stretch 1.7.0
+ *                          Settings > Edit.     Was: anchored_stretch 1.7.2
  *
  *   3. LAYERED LOCK ALPHA  Makes Lock Alpha Channel look at every layer, so you can
  *                          paint on an empty layer above your artwork.
@@ -53,6 +53,13 @@
 // Must match the filename: embodytools.js
 const PLUGIN_ID = 'embodytools';
 const PLUGIN_VERSION = '1.0.0';
+
+// The bundle's icon, which is Anchored Stretch's. Embedded so this stays a single file
+// wherever it is loaded from; Blockbench's getIconNode takes any data:image/ URL. It
+// lives up here rather than in the module because the register block at the bottom
+// cannot see inside a module's closure, and the assembler lifts it straight out of
+// anchored_stretch.js so the two can never drift apart.
+const ICON = 'data:image/png;base64,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';
 
 // Blockbench runs plugin code as new Function('requireNativeModule', 'require', code),
 // so requireNativeModule is a parameter in our enclosing scope. Guard anyway so the
@@ -2739,7 +2746,7 @@ BBPlugin.register(PLUGIN_ID, {
 		'',
 		'Embody Games internal tool. Source: https://github.com/Embody-Games/EGT-EmbodyTools'
 	].join('\n'),
-	icon: 'build',
+	icon: ICON,
 	version: PLUGIN_VERSION,
 	tags: ['Texturing', 'Layers', 'Hytale'],
 	// Texture Layers needs the desktop app and says so itself; the other two run
