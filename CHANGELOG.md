@@ -2,6 +2,14 @@
 
 Generated from `changelog.json` by `scripts/changelog.mjs`. Edit that file, not this one.
 
+## v1.0.2 - New icon
+
+_2026-09-05_
+
+### Changed
+
+- A new EmbodyTools icon in Blockbench's plugin list.
+
 ## v1.0.1 - EmbodyTools icon
 
 _2026-09-05_

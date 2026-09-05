@@ -1,4 +1,17 @@
 {
+  "1.0.2": {
+    "title": "New icon",
+    "date": "2026-09-05",
+    "author": "Embody Games",
+    "categories": [
+      {
+        "title": "Changed",
+        "list": [
+          "A new EmbodyTools icon in Blockbench's plugin list."
+        ]
+      }
+    ]
+  },
   "1.0.1": {
     "title": "EmbodyTools icon",
     "date": "2026-09-05",
