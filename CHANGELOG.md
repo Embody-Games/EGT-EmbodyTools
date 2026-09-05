@@ -2,6 +2,14 @@
 
 Generated from `changelog.json` by `scripts/changelog.mjs`. Edit that file, not this one.
 
+## v1.0.1 - EmbodyTools icon
+
+_2026-09-05_
+
+### Changed
+
+- The plugin shows the EmbodyTools icon instead of the Anchored Stretch arrow it borrowed in 1.0.0.
+
 ## v1.0.0 - Three plugins, one plugin
 
 _2026-09-04_
@@ -11,7 +19,7 @@ _2026-09-04_
 - Texture Layers, Anchored Stretch and Layered Lock Alpha now live in one plugin. One file to hand out and one version to talk about. Each tool keeps its settings where you already look for it: Export, Edit and Paint.
 - Each tool starts and stops on its own. Texture Layers needs the desktop app for the sidecar files, so in the web app it sits out and the other two work as normal.
 - Anchored Stretch comes in at its 1.7.2 behaviour, so the Vertex Snap tool has a Stretch mode: pick a corner, pick a target, and the cube stretches to reach it with the opposite corner anchored. Core's scale mode stays hidden in the Hytale formats because scaling breaks integer sizes, and stretching leaves size and UVs alone.
-- EmbodyTools has its own icon in Blockbench's plugin list. The image is embedded in the plugin, so it travels with the file wherever it is loaded from.
+- The plugin shows the Anchored Stretch arrow in Blockbench's plugin list. The image is embedded in the file, so it travels with it wherever it is loaded from.
 
 ### Changed
 
