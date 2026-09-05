@@ -297,17 +297,17 @@ async function reopenModel() {
 
 	// =====================================================================
 	section('8. codec handling');
-	check('the bridged codec is wrapped', blockymodel_codec.__layer_bridge_wrapped === true);
-	check('Blockbench\'s own project codec is left alone', project_codec.__layer_bridge_wrapped === undefined);
+	check('the bridged codec is wrapped', blockymodel_codec.__delta_layers_wrapped === true);
+	check('Blockbench\'s own project codec is left alone', project_codec.__delta_layers_wrapped === undefined);
 	// load-order safety net: a codec registered after onload
 	const late_codec = new Codec('late_format', {
 		write(content, path) { fs.writeFileSync(path, content, 'utf-8'); },
 		parse() { return {}; },
 	});
-	check('a codec registered after onload is not wrapped yet', late_codec.__layer_bridge_wrapped === undefined);
+	check('a codec registered after onload is not wrapped yet', late_codec.__delta_layers_wrapped === undefined);
 	globalThis.Blockbench.dispatchEvent('quick_save_model', {});
 	await settle();
-	check('...and gets picked up on the next save', late_codec.__layer_bridge_wrapped === true);
+	check('...and gets picked up on the next save', late_codec.__delta_layers_wrapped === true);
 
 	// =====================================================================
 	section('9. temporary layers (a floating selection) are not persisted');
@@ -441,7 +441,7 @@ async function reopenModel() {
 	const wrapped_write = blockymodel_codec.write;
 	plugin.onunload();
 	check('codec.write restored on unload', blockymodel_codec.write !== wrapped_write);
-	check('wrap marker cleared', blockymodel_codec.__layer_bridge_wrapped === undefined);
+	check('wrap marker cleared', blockymodel_codec.__delta_layers_wrapped === undefined);
 	check('setting removed', globalThis.settings.delta_layers_persist === undefined);
 	check('menu entries removed', Texture.prototype.menu.structure.length === 0,
 		Texture.prototype.menu.structure.length);
