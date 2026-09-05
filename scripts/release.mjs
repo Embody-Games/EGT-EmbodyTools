@@ -166,7 +166,8 @@ const sweepLocks = () => {
 };
 
 sweepLocks();
-run('git', ['add', 'embodytools.js', 'package.json', 'changelog.json', 'CHANGELOG.md']);
+run('git', ['add', 'embodytools.js', 'package.json', 'changelog.json', 'CHANGELOG.md',
+	'embody_tools_icon.png']);
 run('git', ['commit', '-m', `v${version}: ${title}`]);
 run('git', ['tag', '-a', `v${version}`, '-m', `v${version}: ${title}`]);
 sweepLocks();
