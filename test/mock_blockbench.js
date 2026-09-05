@@ -27,6 +27,12 @@ g.Image = Image;
 g.isApp = true;
 g.PathModule = PathModule;
 Math.clamp = (number, min, max) => Math.max(min, Math.min(max, number));
+// Blockbench extends Array with this and plugin code uses it as if it were standard.
+Array.prototype.remove = function (item) {
+	const index = this.indexOf(item);
+	if (index >= 0) this.splice(index, 1);
+	return this;
+};
 
 g.pathToName = function (path, extension) {
 	const parts = path.split('/').join('\\').split('\\');

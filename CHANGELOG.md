@@ -8,14 +8,15 @@ _2026-09-04_
 
 ### Added
 
-- Texture Layers, One-Sided Stretch and Layered Lock Alpha now live in one plugin. One file to hand out and one version to talk about. Each tool keeps its settings where you already look for it: Export, Edit and Paint.
+- Texture Layers, Anchored Stretch and Layered Lock Alpha now live in one plugin. One file to hand out and one version to talk about. Each tool keeps its settings where you already look for it: Export, Edit and Paint.
 - Each tool starts and stops on its own. Texture Layers needs the desktop app for the sidecar files, so in the web app it sits out and the other two work as normal.
+- Anchored Stretch comes in at its 1.7.0 behaviour, so the Vertex Snap tool has a Stretch mode: pick a corner, pick a target, and the cube stretches to reach it with the opposite corner anchored. Core's scale mode stays hidden in the Hytale formats because scaling breaks integer sizes, and stretching leaves size and UVs alone.
 
 ### Changed
 
-- Your settings carry over. The setting ids are the same as in the three older plugins, so nothing needs setting up again.
+- Texture Layers and Layered Lock Alpha keep their setting ids, so what you had set in those two is still set. Anchored Stretch keeps the ids it took when it was renamed from One-Sided Stretch, so its settings carry over from that rename, not from before it.
 - Layer sidecars now name embodytools as what wrote them. The sidecar format is still version 3, so sidecars written by the old layer plugin load here, and sidecars written here still load in it.
-- Blockbench 5.0.5 or newer, which is what One-Sided Stretch already asked for. Layered Lock Alpha on its own used to run on 4.10.
+- Blockbench 5.0.5 or newer, which is what Anchored Stretch already asked for. Layered Lock Alpha on its own used to run on 4.10.
 
 ### Fixed
 
@@ -23,9 +24,9 @@ _2026-09-04_
 
 ### Removed
 
-- The three separate plugins. Once EmbodyTools is installed, remove embodygames_texture_layer_bridge.js, one_sided_stretch.js and layered_lock_alpha.js under Blockbench > Plugins.
+- The separate plugins. Once EmbodyTools is installed, remove embodygames_texture_layer_bridge.js, anchored_stretch.js, one_sided_stretch.js and layered_lock_alpha.js under Blockbench > Plugins.
 
 ### Safeguards
 
-- If one of those three is still installed, EmbodyTools says so on load, in the console and in a message box. Two copies of the same tool share the same setting ids, and whichever one unloads first takes the other's settings with it.
+- If any of those are still installed, EmbodyTools says so on load, in the console and in a message box. Two copies of the same tool fight over the same settings, and the older One-Sided Stretch would patch the stretch tool a second time under different setting ids.
 - A tool that fails while starting up is cleaned up and skipped, with a line in the console, and the other two carry on.

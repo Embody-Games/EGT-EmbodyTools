@@ -1,5 +1,5 @@
 /*
- * Tests for the two modules that are not the layer bridge: One-Sided Stretch and
+ * Tests for the two modules that are not the layer bridge: Anchored Stretch and
  * Layered Lock Alpha, plus the bundle plumbing that holds all three.
  *
  * The layer suites (run_tests.js, run_tests_52.js) run against a mock that has no
@@ -127,6 +127,33 @@ class Cube {
 globalThis.Cube = Cube;
 const core_cube_resize = Cube.prototype.resize;
 
+/*
+ * Vertexsnap and the mode dropdown it reads. Only the pass-through path is exercised
+ * below: the stretch snap itself needs THREE, Undo and the real gizmos, which is more
+ * Blockbench than a harness this size should pretend to be. What is worth testing is
+ * that the mode appears, that it only takes over when it should, and that unloading
+ * takes it back out of the dropdown.
+ */
+let core_snap_calls = 0;
+const core_vertex_snap = function (data, options, amended) {
+	core_snap_calls++;
+	return 'CORE_SNAP';
+};
+globalThis.Vertexsnap = {
+	snap: core_vertex_snap,
+	move_origin: false,
+	elements: [],
+	groups: [],
+};
+globalThis.BarItems.vertex_snap_mode = {
+	value: 'move',
+	values: ['move', 'resize'],
+	options: { move: { name: 'Move' }, resize: { name: 'Resize' } },
+	get() { return this.value; },
+	set(value) { this.value = value; },
+};
+const snap_mode = globalThis.BarItems.vertex_snap_mode;
+
 globalThis.Format.stretch_cubes = true;
 
 /** Blockbench's adjustFromAndToForInflateAndStretch, for asserting on. */
@@ -161,22 +188,22 @@ check('the transform edit module was wrapped',
 check('Cube.prototype.resize was wrapped', Cube.prototype.resize !== core_cube_resize);
 check('Painter.edit was wrapped', globalThis.Painter.edit !== core_painter_edit);
 check('the stretch settings exist',
-	!!settings.one_sided_stretch && !!settings.one_sided_stretch_step
-	&& !!settings.one_sided_stretch_resize_anchor);
+	!!settings.anchored_stretch_tool && !!settings.anchored_stretch_step
+	&& !!settings.anchored_stretch_resize);
 check('the paint settings exist',
 	!!settings.lla_enabled && !!settings.lla_clamp && !!settings.lla_allow_erase
 	&& !!settings.lla_include_hidden);
 check('the layer settings exist too, in one plugin',
 	!!settings.embodygames_persist_texture_layers && !!settings.embodygames_watch_layer_files);
 check('every setting says which plugin owns it',
-	[settings.one_sided_stretch, settings.lla_enabled, settings.embodygames_persist_texture_layers]
+	[settings.anchored_stretch_tool, settings.lla_enabled, settings.embodygames_persist_texture_layers]
 		.every((setting) => setting.plugin === 'embodytools'));
 check('the Lock Alpha tooltip now explains the layer-aware behaviour',
 	BarItems.lock_alpha.description !== CORE_LOCK_ALPHA_TOOLTIP
 	&& /layer/i.test(BarItems.lock_alpha.description));
 
 // ===========================================================================
-// One-Sided Stretch
+// Anchored Stretch
 // ===========================================================================
 
 section('2. the stretch drag value is a fixed step, not snapped distance');
@@ -200,10 +227,10 @@ check('Ctrl quarters it', near(ctrled, 4 * STEP / 4), ctrled);
 const both = edit_module.calculateOffset({ point: { x: 4, y: 0, z: 0 }, axis: 'x', direction: 1, event: { shiftKey: true, ctrlKey: true } });
 check('both together take an eighth', near(both, 4 * STEP / 8), both);
 
-settings.one_sided_stretch_step.value = 0.125; // stock Blockbench's own step
+settings.anchored_stretch_step.value = 0.125; // stock Blockbench's own step
 const stock = edit_module.calculateOffset({ point: { x: 2, y: 0, z: 0 }, axis: 'x', direction: 1, event: {} });
 check('the step setting overrides the format default', near(stock, 0.25), stock);
-settings.one_sided_stretch_step.value = 0;
+settings.anchored_stretch_step.value = 0;
 
 globalThis.Toolbox.selected = { id: 'move_tool' };
 check('with another tool selected core works out the offset, untouched',
@@ -299,17 +326,46 @@ check('an unstretched cube goes straight through to core',
 	cube.from[0] === 0 && cube.to[0] === 10, [cube.from[0], cube.to[0]]);
 
 cube = new Cube([0, 0, 0], [8, 8, 8], [1.5, 1, 1]);
-settings.one_sided_stretch_resize_anchor.value = false;
+settings.anchored_stretch_resize.value = false;
 cube.resize(2, 0, false);
 check('with the anchor setting off, core\'s own drift is back',
 	!near(renderedFace(cube, 0, false), -2), renderedFace(cube, 0, false));
-settings.one_sided_stretch_resize_anchor.value = true;
+settings.anchored_stretch_resize.value = true;
+
+section('5. the Vertex Snap tool gets a Stretch mode');
+check('the mode is in the dropdown',
+	!!snap_mode.options.stretch && snap_mode.values.includes('stretch'),
+	snap_mode.values);
+check('it offers itself in a format that stretches',
+	snap_mode.options.stretch.condition() === true);
+globalThis.Format.stretch_cubes = false;
+check('and hides in one that does not', snap_mode.options.stretch.condition() === false);
+globalThis.Format.stretch_cubes = true;
+check('Vertexsnap.snap is wrapped', Vertexsnap.snap !== core_vertex_snap);
+
+let snaps = core_snap_calls;
+snap_mode.value = 'move';
+check('a snap in another mode goes straight to core',
+	Vertexsnap.snap({}, 0) === 'CORE_SNAP' && core_snap_calls === snaps + 1);
+
+snap_mode.value = 'stretch';
+globalThis.Format.stretch_cubes = false;
+snaps = core_snap_calls;
+check('so does a stretch snap in a format that cannot stretch',
+	Vertexsnap.snap({}, 0) === 'CORE_SNAP' && core_snap_calls === snaps + 1);
+globalThis.Format.stretch_cubes = true;
+
+Vertexsnap.move_origin = true;
+snaps = core_snap_calls;
+check('and so does moving the origin, which is core\'s job either way',
+	Vertexsnap.snap({}, 0) === 'CORE_SNAP' && core_snap_calls === snaps + 1);
+Vertexsnap.move_origin = false;
 
 // ===========================================================================
 // Layered Lock Alpha
 // ===========================================================================
 
-section('5. Lock Alpha looks at every layer');
+section('6. Lock Alpha looks at every layer');
 
 /** A texture with layers, and pixels painted by hand. */
 function layeredTexture(size, paint_layers) {
@@ -397,7 +453,7 @@ check('with Lock Alpha off the brush is not clipped at all',
 	pixel(top, 12, 2)[3] === 255, pixel(top, 12, 2));
 Painter.lock_alpha = true;
 
-section('6. erasing an upper layer reveals what is under it');
+section('7. erasing an upper layer reveals what is under it');
 /** Erase the left 4 columns, the way the eraser does. */
 function eraseStripe(texture) {
 	Painter.edit(texture, (canvas) => {
@@ -431,7 +487,7 @@ check('and the setting can freeze alpha outright, like vanilla',
 settings.lla_allow_erase.value = true;
 globalThis.Toolbox.selected = { id: 'brush_tool' };
 
-section('7. hidden layers only count when you say so');
+section('8. hidden layers only count when you say so');
 const HIDE_IT = (ctx) => { ctx.fillStyle = '#ff0000'; ctx.fillRect(0, 0, 16, 16); };
 texture = layeredTexture(16, [HIDE_IT, EMPTY]);
 texture.layers[0].visible = false;
@@ -447,7 +503,7 @@ paintGreen(texture);
 check('unless the setting says to count it', pixel(top, 4, 4)[3] === 255, pixel(top, 4, 4));
 settings.lla_include_hidden.value = false;
 
-section('8. the stroke hooks are handed through to core');
+section('9. the stroke hooks are handed through to core');
 const started_before = paint_started;
 Painter.startPaintTool('a', 'b');
 Painter.stopPaintTool();
@@ -458,8 +514,14 @@ check('stopPaintTool too', paint_stopped >= 1);
 // bundle plumbing
 // ===========================================================================
 
-section('9. unload puts Blockbench back exactly as it was');
+section('10. unload puts Blockbench back exactly as it was');
+snap_mode.value = 'stretch'; // the mode about to be taken away is the one selected
 plugin.onunload();
+check('Vertexsnap.snap restored', Vertexsnap.snap === core_vertex_snap);
+check('the Stretch mode is out of the dropdown again',
+	!snap_mode.options.stretch && !snap_mode.values.includes('stretch'), snap_mode.values);
+check('and the tool was moved off it rather than left on a mode that is gone',
+	snap_mode.value === 'move', snap_mode.value);
 check('Painter.edit restored', globalThis.Painter.edit === core_painter_edit);
 check('Painter.startPaintTool restored', globalThis.Painter.startPaintTool === core_start_paint);
 check('Painter.stopPaintTool restored', globalThis.Painter.stopPaintTool === core_stop_paint);
@@ -472,23 +534,40 @@ check('the transform edit module restored',
 	&& edit_module.onCancel === core_edit_module.onCancel);
 check('Cube.prototype.resize restored', Cube.prototype.resize === core_cube_resize);
 check('every setting the bundle added is gone', ![
-	'one_sided_stretch', 'one_sided_stretch_step', 'one_sided_stretch_resize_anchor',
+	'anchored_stretch_tool', 'anchored_stretch_step', 'anchored_stretch_resize',
 	'lla_enabled', 'lla_clamp', 'lla_allow_erase', 'lla_include_hidden',
 	'embodygames_persist_texture_layers', 'embodygames_watch_layer_files',
 ].some((id) => !!settings[id]), Object.keys(settings));
 
-section('10. a module Blockbench cannot host sits out on its own');
-// Take the transform machinery away and load again: One-Sided Stretch has nothing to
-// hook, and the other two must not care.
+section('11. a module Blockbench cannot host sits out on its own');
+// Anchored Stretch has three hooks and gives up on each separately, so it only sits
+// out when all three are gone. Take the lot away and the other two must not care.
 const parked_transformer = globalThis.TransformerModule;
+const parked_cube = globalThis.Cube;
+const parked_vertexsnap = globalThis.Vertexsnap;
 delete globalThis.TransformerModule;
+delete globalThis.Cube;
+delete globalThis.Vertexsnap;
 plugin.onload();
-check('the stretch module skipped itself', !settings.one_sided_stretch);
+check('the stretch module skipped itself', !settings.anchored_stretch_tool);
 check('Layered Lock Alpha loaded anyway', !!settings.lla_enabled && globalThis.Painter.edit !== core_painter_edit);
 check('Texture Layers loaded anyway', !!settings.embodygames_persist_texture_layers);
 plugin.onunload();
 check('and unloading a partial bundle is still clean',
 	globalThis.Painter.edit === core_painter_edit && !settings.lla_enabled);
+globalThis.TransformerModule = parked_transformer;
+globalThis.Cube = parked_cube;
+globalThis.Vertexsnap = parked_vertexsnap;
+
+// Losing one hook is not the same as losing all of them: the other two still get
+// patched, which is how the standalone plugin behaved as well.
+console.log('       (one stack trace below is on purpose: a hook is being taken away)');
+delete globalThis.TransformerModule;
+plugin.onload();
+check('losing only the transform module still leaves the rest of the tool working',
+	!!settings.anchored_stretch_tool && Cube.prototype.resize !== core_cube_resize
+	&& !!snap_mode.options.stretch);
+plugin.onunload();
 globalThis.TransformerModule = parked_transformer;
 
 // Same again, for the desktop-only module.
@@ -496,11 +575,11 @@ const parked_is_app = globalThis.isApp;
 globalThis.isApp = false;
 plugin.onload();
 check('in the web app Texture Layers sits out', !settings.embodygames_persist_texture_layers);
-check('and the other two still work', !!settings.one_sided_stretch && !!settings.lla_enabled);
+check('and the other two still work', !!settings.anchored_stretch_tool && !!settings.lla_enabled);
 plugin.onunload();
 globalThis.isApp = parked_is_app;
 
-section('11. a module that throws while starting up does not take the others with it');
+section('12. a module that throws while starting up does not take the others with it');
 console.log('       (the stack traces below are on purpose: a hook is being broken deliberately)');
 const parked_painter_edit = globalThis.Painter.edit;
 // Painter.edit still reads as a function, so the module is not skipped: it gets part
@@ -511,7 +590,7 @@ Object.defineProperty(globalThis.Painter, 'edit', {
 	set() { throw new Error('boom'); },
 });
 plugin.onload();
-check('the other two loaded', !!settings.one_sided_stretch && !!settings.embodygames_persist_texture_layers);
+check('the other two loaded', !!settings.anchored_stretch_tool && !!settings.embodygames_persist_texture_layers);
 check('the half-loaded one was cleaned up, settings and all', !settings.lla_enabled, Object.keys(settings));
 plugin.onunload();
 Object.defineProperty(globalThis.Painter, 'edit', {

@@ -10,10 +10,10 @@
  *                          next to the texture PNG. Desktop only.
  *                          Settings > Export.   Was: embodygames_texture_layer_bridge 1.3.0
  *
- *   2. ONE-SIDED STRETCH   Makes the Stretch tool move only the face you drag, and
- *                          stops resizing a stretched cube from creeping outward on
- *                          the anchored side.
- *                          Settings > Edit.     Was: one_sided_stretch 1.5.0
+ *   2. ANCHORED STRETCH    Makes the Stretch tool move only the face you drag, stops
+ *                          resizing a stretched cube from creeping outward on the
+ *                          anchored side, and adds a Stretch mode to Vertex Snap.
+ *                          Settings > Edit.     Was: anchored_stretch 1.7.0
  *
  *   3. LAYERED LOCK ALPHA  Makes Lock Alpha Channel look at every layer, so you can
  *                          paint on an empty layer above your artwork.
@@ -1477,7 +1477,7 @@ const TextureLayersModule = (function () {
 
 })();
 // ===========================================================================
-// ===== 2/3  ONE-SIDED STRETCH ==============================================
+// ===== 2/3  ANCHORED STRETCH ===============================================
 // ===========================================================================
 /*
  * Blockbench's Stretch tool (enabled by formats with `stretch_cubes`, e.g. the
@@ -1579,11 +1579,26 @@ const TextureLayersModule = (function () {
  * integer_size rounding (on for the Hytale formats) would round away any attempt
  * to compensate for that, and stretch values in practice sit near 1, so the
  * difference is small.
+ *
+ *
+ * Part three: vertex snap, stretch mode
+ * -------------------------------------
+ * The Vertex Snap tool gets a Stretch mode alongside Move and Resize: pick a
+ * corner, pick a target, and the cube stretches to reach it with the opposite
+ * corner anchored. Core has a scale mode that would do something similar, but it
+ * is hidden in the Hytale formats because scaling breaks integer sizes.
+ * Stretching leaves size and UVs alone, so it is safe there.
+ *
+ * It works by wrapping Vertexsnap.snap and taking over only while the Stretch
+ * mode is picked and the format allows stretching, and by adding the mode to
+ * BarItems.vertex_snap_mode. A stretch that would put the dragged corner behind
+ * the anchored one is clamped to MIN_STRETCH rather than going negative and
+ * turning the cube inside out.
  */
-const OneSidedStretchModule = (function () {
-	const SETTING_ID = 'one_sided_stretch';
-	const RESIZE_SETTING_ID = 'one_sided_stretch_resize_anchor';
-	const STEP_SETTING_ID = 'one_sided_stretch_step';
+const AnchoredStretchModule = (function () {
+	const SETTING_ID = 'anchored_stretch_tool';
+	const RESIZE_SETTING_ID = 'anchored_stretch_resize';
+	const STEP_SETTING_ID = 'anchored_stretch_step';
 
 	// Growth per step, measured the centred way, per format. One-sided mode applies
 	// half of this so the cube grows by the same amount either way.
@@ -1596,6 +1611,11 @@ const OneSidedStretchModule = (function () {
 
 	// Model units of drag per step, matching the resize tool's one unit per step.
 	const UNITS_PER_STEP = 1;
+
+	// Vertex snap: the mode key added to BarItems.vertex_snap_mode, and the floor a
+	// stretch is clamped to when the target sits behind the anchored face.
+	const VERTEX_SNAP_MODE = 'stretch';
+	const MIN_STRETCH = 0.0001;
 
 	// Held modifiers cut the step down for fine tuning. Alt is not among them; it
 	// switches back to centred stretch.
@@ -1611,6 +1631,9 @@ const OneSidedStretchModule = (function () {
 	let wrappers = {};
 	let original_resize;
 	let resize_wrapper;
+	let original_snap;
+	let snap_wrapper;
+	let mode_option_added = false;
 
 	// uuid -> { from, to, stretch } captured when a stretch drag starts
 	let snapshots = new Map();
@@ -1778,6 +1801,170 @@ const OneSidedStretchModule = (function () {
 		if (typeof updateNslideValues === 'function') updateNslideValues();
 	}
 
+	/**
+	 * Vertex snap, stretch mode.
+	 *
+	 * Core's vertex snap has a scale mode, but it is gated behind
+	 * `condition: () => !Format.integer_size`, so it is hidden and inert in the
+	 * Hytale formats. Scaling would also change the cube's size, which is what the
+	 * integer size rule exists to prevent. Stretching reaches the same place while
+	 * leaving size — and therefore the UV map — alone.
+	 *
+	 * Per axis, to move the picked corner by d while the opposite face stays put:
+	 *
+	 *     stretch += sign * d / (2 * reach)      // reach = half_size + inflate
+	 *     from/to += sign * reach * change_in_stretch     // = d/2 when unclamped
+	 *
+	 * sign is +1 when the picked corner is on the axis's high side. The from/to
+	 * shift is written in terms of the stretch actually applied rather than d/2
+	 * directly, so the anchor still holds when the stretch is clamped.
+	 */
+	function applyVertexStretch(element, offset, mesh_space_vertex, ignore) {
+		let changed = false;
+		let clamped = false;
+
+		for (let axis = 0; axis < 3; axis++) {
+			if (ignore && ignore[axis]) continue;
+			let d = offset[axis];
+			if (!d || !isFinite(d)) continue;
+
+			let half_size = element.size(axis) / 2;
+			let reach = half_size + (element.inflate || 0);
+			if (Math.abs(reach) < 1e-9) continue; // flat on this axis, nothing to scale
+
+			let centre = element.from[axis] + half_size;
+			// mesh space is model space minus the origin, so put the vertex back into
+			// model space before deciding which side of the cube it sits on
+			let high = (mesh_space_vertex[axis] + element.origin[axis]) >= centre;
+			let sign = high ? 1 : -1;
+
+			let before = element.stretch[axis];
+			let after = before + sign * d / (2 * reach);
+			if (after < MIN_STRETCH) {
+				after = MIN_STRETCH;
+				clamped = true;
+			}
+			if (after === before) continue;
+
+			let shift = sign * reach * (after - before);
+			element.from[axis] += shift;
+			element.to[axis] += shift;
+			element.stretch[axis] = after;
+			changed = true;
+		}
+
+		return {changed, clamped};
+	}
+
+	/** Stands in for Vertexsnap.snap while the stretch mode is picked. */
+	function vertexStretchSnap(data, options, amended) {
+		let elements = Vertexsnap.elements.slice();
+		if (Vertexsnap.groups && Vertexsnap.groups.length) {
+			for (let group of Vertexsnap.groups) {
+				group.forEachChild(child => elements.safePush(child), OutlinerElement);
+			}
+		}
+		Undo.initEdit({elements, groups: Vertexsnap.groups}, amended);
+
+		let ignore_axis = options && options.ignore_axis;
+		let ignore = [!!(ignore_axis && ignore_axis.x), !!(ignore_axis && ignore_axis.y), !!(ignore_axis && ignore_axis.z)];
+
+		let target = Vertexsnap.getGlobalVertexPos(data.element, data.vertex);
+		let global_delta = new THREE.Vector3().copy(target).sub(Vertexsnap.vertex_pos);
+		let clamped = false;
+
+		for (let element of elements) {
+			if (!canStretch(element) || typeof element.size !== 'function' || !element.mesh) continue;
+
+			let rotation = element.mesh.getWorldQuaternion(new THREE.Quaternion()).invert();
+			let offset = new THREE.Vector3().copy(global_delta).applyQuaternion(rotation).toArray();
+			let vertex = element.mesh.worldToLocal(new THREE.Vector3().copy(Vertexsnap.vertex_pos)).toArray();
+
+			let result = applyVertexStretch(element, offset, vertex, ignore);
+			clamped = clamped || result.clamped;
+		}
+
+		Vertexsnap.clearVertexGizmos();
+		let update_options = {
+			elements,
+			element_aspects: {transform: true, geometry: true},
+			selection: true
+		};
+		if (Vertexsnap.groups && Vertexsnap.groups.length) {
+			update_options.groups = Vertexsnap.groups;
+			update_options.group_aspects = {transform: true};
+		}
+		Canvas.updateView(update_options);
+		Undo.finishEdit('Vertex snap stretch');
+		Vertexsnap.step1 = true;
+
+		if (clamped && typeof Blockbench !== 'undefined' && Blockbench.showQuickMessage) {
+			Blockbench.showQuickMessage('Target sits behind the anchored side', 2500);
+		}
+
+		if (!amended) {
+			Undo.amendEdit({
+				ignore_axis: {
+					type: 'inline_multi_select',
+					label: tl('edit.vertex_snap.ignore_axis', ''),
+					options: {x: 'X', y: 'Y', z: 'Z'},
+					value: {x: false, y: false, z: false}
+				}
+			}, form => {
+				Vertexsnap.snap(data, form, true);
+			});
+		}
+	}
+
+	function patchVertexSnap() {
+		if (typeof Vertexsnap === 'undefined' || typeof Vertexsnap.snap !== 'function') {
+			console.error('[embodytools/stretch] Could not find Vertexsnap.snap; the vertex snap stretch mode is inactive.');
+			return;
+		}
+
+		original_snap = Vertexsnap.snap;
+		snap_wrapper = function (data, options = 0, amended) {
+			let mode = BarItems.vertex_snap_mode && BarItems.vertex_snap_mode.get();
+			let mine = mode === VERTEX_SNAP_MODE
+				&& Format && Format.stretch_cubes
+				&& !Vertexsnap.move_origin;
+
+			if (!mine) return original_snap.call(this, data, options, amended);
+			return vertexStretchSnap(data, options, amended);
+		};
+		Vertexsnap.snap = snap_wrapper;
+
+		// Add the mode to the existing dropdown. `open()` reads `options` live and
+		// `trigger()` (wheel / keybind cycling) reads `values`, so both need the key.
+		let select = BarItems.vertex_snap_mode;
+		if (select && select.options && !select.options[VERTEX_SNAP_MODE]) {
+			select.options[VERTEX_SNAP_MODE] = {
+				name: 'Stretch',
+				condition: () => Format && Format.stretch_cubes
+			};
+			if (select.values && !select.values.includes(VERTEX_SNAP_MODE)) {
+				select.values.push(VERTEX_SNAP_MODE);
+			}
+			mode_option_added = true;
+		}
+	}
+
+	function unpatchVertexSnap() {
+		if (original_snap && typeof Vertexsnap !== 'undefined' && Vertexsnap.snap === snap_wrapper) {
+			Vertexsnap.snap = original_snap;
+		}
+		original_snap = null;
+		snap_wrapper = null;
+
+		let select = typeof BarItems !== 'undefined' && BarItems.vertex_snap_mode;
+		if (mode_option_added && select) {
+			if (select.value === VERTEX_SNAP_MODE && select.set) select.set('move');
+			if (select.options) delete select.options[VERTEX_SNAP_MODE];
+			if (select.values) select.values.remove(VERTEX_SNAP_MODE);
+		}
+		mode_option_added = false;
+	}
+
 	function patchResize() {
 		if (typeof Cube === 'undefined' || typeof Cube.prototype.resize !== 'function') {
 			console.error('[embodytools/stretch] Could not find Cube.prototype.resize; the resize anchor fix is inactive.');
@@ -1824,6 +2011,7 @@ const OneSidedStretchModule = (function () {
 
 	function patch() {
 		patchResize();
+		patchVertexSnap();
 		edit_module = typeof TransformerModule !== 'undefined' && TransformerModule.modules && TransformerModule.modules.edit;
 		if (!edit_module) {
 			console.error('[embodytools/stretch] Could not find the edit transform module. This plugin needs Blockbench 5.0.5 or newer.');
@@ -1872,6 +2060,7 @@ const OneSidedStretchModule = (function () {
 
 	function unpatch() {
 		snapshots.clear();
+		unpatchVertexSnap();
 
 		// Only restore if nothing else has wrapped us in the meantime.
 		if (original_resize && typeof Cube !== 'undefined' && Cube.prototype.resize === resize_wrapper) {
@@ -1896,22 +2085,28 @@ const OneSidedStretchModule = (function () {
 	// -----------------------------------------------------------------------
 
 	return {
-		id: 'one_sided_stretch',
-		title: 'One-Sided Stretch',
+		id: 'anchored_stretch',
+		title: 'Anchored Stretch',
 		settings: [SETTING_ID, STEP_SETTING_ID, RESIZE_SETTING_ID],
 
 		blocked() {
-			// Everything here hangs off the transform gizmo's edit module.
-			const edit = typeof TransformerModule !== 'undefined'
+			// Three separate hooks, and patch() already gives up on each one on its own
+			// with a line in the console. So this only stands in the way when there is
+			// nothing at all to hook, which on 5.0.5 and up should never happen.
+			const has_edit = !!(typeof TransformerModule !== 'undefined'
 				&& TransformerModule.modules
-				&& TransformerModule.modules.edit;
-			if (!edit) return 'no transform edit module, which needs Blockbench 5.0.5 or newer';
+				&& TransformerModule.modules.edit);
+			const has_resize = typeof Cube !== 'undefined' && typeof Cube.prototype.resize === 'function';
+			const has_snap = typeof Vertexsnap !== 'undefined' && typeof Vertexsnap.snap === 'function';
+			if (!has_edit && !has_resize && !has_snap) {
+				return 'nothing to hook here: no transform edit module, no Cube.resize, no Vertexsnap';
+			}
 			return null;
 		},
 
 		load() {
 			stretch_setting = new Setting(SETTING_ID, {
-				name: 'One-Sided Stretch Tool',
+				name: 'Anchored Stretch Tool',
 				description: 'Stretch cubes only on the side you drag, keeping the opposite face in place. Hold Alt while dragging to stretch from the centre instead.',
 				category: 'edit',
 				value: true,
@@ -2422,14 +2617,22 @@ const LayeredLockAlphaModule = (function () {
  * it.
  */
 
-const MODULES = [TextureLayersModule, OneSidedStretchModule, LayeredLockAlphaModule];
+const MODULES = [TextureLayersModule, AnchoredStretchModule, LayeredLockAlphaModule];
 
-// The plugin each module used to be, for the "you still have the old one installed"
-// warning below.
+// The plugins each module used to be, for the "you still have the old one installed"
+// warning below. Anchored Stretch has two: it was called One-Sided Stretch before, and
+// that older one patches the same stretch tool under different setting ids.
 const REPLACES = {
-	texture_layers: { id: 'embodygames_texture_layer_bridge', name: 'Embody Games Texture Layers' },
-	one_sided_stretch: { id: 'one_sided_stretch', name: 'One-Sided Stretch' },
-	layered_lock_alpha: { id: 'layered_lock_alpha', name: 'Layered Lock Alpha' },
+	texture_layers: [
+		{ id: 'embodygames_texture_layer_bridge', name: 'Embody Games Texture Layers' },
+	],
+	anchored_stretch: [
+		{ id: 'anchored_stretch', name: 'Anchored Stretch' },
+		{ id: 'one_sided_stretch', name: 'One-Sided Stretch' },
+	],
+	layered_lock_alpha: [
+		{ id: 'layered_lock_alpha', name: 'Layered Lock Alpha' },
+	],
 };
 
 const TAG = '[embodytools]';
@@ -2459,17 +2662,21 @@ function checkForLegacyPlugins() {
 		}
 	} catch (error) { /* plugin list not walkable, the settings check still stands */ }
 
-	const clashing = MODULES.filter((module) => {
-		const previous = REPLACES[module.id];
-		if (previous && installed.has(previous.id)) return true;
-		return typeof settings !== 'undefined' && module.settings.some((id) => !!settings[id]);
-	});
-	if (!clashing.length) return;
-
-	const names = clashing.map((module) => {
-		const previous = REPLACES[module.id];
-		return previous ? previous.name + ' (' + previous.id + '.js)' : module.title;
-	});
+	const names = [];
+	for (const module of MODULES) {
+		const previous = REPLACES[module.id] || [];
+		if (!previous.length) continue;
+		// Named outright by Blockbench's plugin list, whichever of us loaded first.
+		const found = previous.filter((plugin) => installed.has(plugin.id));
+		// Or, if the list was no help: one of our own setting ids already exists, which
+		// can only be the plugin those ids came from.
+		if (!found.length && typeof settings !== 'undefined'
+			&& module.settings.some((id) => !!settings[id])) {
+			found.push(previous[0]);
+		}
+		for (const plugin of found) names.push(plugin.name + ' (' + plugin.id + '.js)');
+	}
+	if (!names.length) return;
 	grumble('these plugins are still installed and do the same job as EmbodyTools:\n  '
 		+ names.join('\n  ')
 		+ '\nRemove them in Blockbench > Plugins, then reload, or the two copies will '
@@ -2495,12 +2702,12 @@ BBPlugin.register(PLUGIN_ID, {
 	title: 'EmbodyTools',
 	author: 'Embody Games',
 	description: 'Embody Games internal toolset. Keeps texture layers alive across saves for '
-		+ 'formats that cannot store them, makes the Stretch tool one-sided, and makes Lock Alpha '
-		+ 'Channel respect every layer.',
+		+ 'formats that cannot store them, anchors the face you are not dragging when stretching, '
+		+ 'and makes Lock Alpha Channel respect every layer.',
 	about: [
 		'Three tools that used to be three plugins. Each one can be turned off on its own, and each keeps its settings where you would look for it.',
 		'',
-		'## Texture Layers &mdash; Settings > Export',
+		'## Texture Layers (Settings > Export)',
 		'',
 		'Keeps a texture\'s layer stack (image, blend mode, opacity, offset, visibility, order, and 5.2 layer groups) alive across a save and reload for formats whose file has no concept of layers, such as Hytale\'s `.blockymodel`. The model file is never touched: the stack goes in a sidecar next to the texture PNG, `Texture.layers.json` plus a `Texture.layers/` folder with one PNG per layer. Anything that only cares about the model plus flat texture never sees it.',
 		'',
@@ -2509,18 +2716,19 @@ BBPlugin.register(PLUGIN_ID, {
 		'- Save, reload and delete by hand from the texture\'s right-click menu.',
 		'- Desktop app only, since it needs real filesystem access.',
 		'',
-		'## One-Sided Stretch &mdash; Settings > Edit',
+		'## Anchored Stretch (Settings > Edit)',
 		'',
 		'Blockbench\'s Stretch tool scales cubes around their centre, so both faces on an axis move when you drag one handle. With this the dragged face moves and the opposite face stays put: the cube\'s from/to are repositioned by the same amount the stretched half grew.',
 		'',
 		'- Since all the growth lands on one face, the applied stretch is halved, so the face you drag tracks at the rate it always did rather than twice as fast.',
 		'- **Stretch per Drag Step** sets a fixed step instead of stock\'s snapped-distance maths, so the value lands on round numbers and the tool no longer gets coarser as you zoom out. It defaults to the format\'s base scale: 0.015625 for Hytale characters, 0.03125 for props.',
 		'- Hold **Shift** for half a step, **Ctrl** for a quarter, both for an eighth. Hold **Alt** while dragging for centred stretch.',
+		'- The Vertex Snap tool gains a **Stretch** mode: pick a corner, pick a target, and the cube stretches to reach it with the opposite corner anchored. Core\'s scale mode is hidden in the Hytale formats because it would break integer sizes; stretching leaves size and UVs alone.',
 		'- Works on the single-axis stretch handles. The plane and uniform handles stay centred, same as with the Resize tool.',
 		'- It also fixes the other half of the problem: **resizing** a cube that already has stretch moves the anchored face too, because Blockbench applies the size change to from/to without accounting for the stretch multiplier. The anchored face is now put back where it was, on the gizmo, the size sliders and keyboard nudges alike.',
 		'- Only active in formats that support cube stretching, such as the Hytale formats.',
 		'',
-		'## Layered Lock Alpha &mdash; Settings > Paint',
+		'## Layered Lock Alpha (Settings > Paint)',
 		'',
 		'Lock Alpha Channel only looks at the layer you are painting on, so on a fresh layer above your artwork everything is locked and the brush does nothing. This makes it consider the combined alpha of every layer: a pixel is locked only when it is transparent on all of them, and strokes are clipped to the combined silhouette.',
 		'',

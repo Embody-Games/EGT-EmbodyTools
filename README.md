@@ -5,7 +5,7 @@ Embody Games' Blockbench toolset: three tools in one plugin.
 | Tool | What it does | Where its settings live |
 | --- | --- | --- |
 | **Texture Layers** | Keeps a texture's layer stack alive across a save and reload for formats that cannot store layers, such as Hytale's `.blockymodel`. Desktop app only. | Settings > Export |
-| **One-Sided Stretch** | Makes the Stretch tool move only the face you drag, and stops resizing a stretched cube from creeping outward on the anchored side. | Settings > Edit |
+| **Anchored Stretch** | Makes the Stretch tool move only the face you drag, stops resizing a stretched cube from creeping outward on the anchored side, and adds a Stretch mode to Vertex Snap. | Settings > Edit |
 | **Layered Lock Alpha** | Makes Lock Alpha Channel look at every layer, so you can paint on an empty layer above your artwork. | Settings > Paint |
 
 These were three separate plugins until v1.0.0. Same behaviour, same settings, one file to hand out.
@@ -15,7 +15,7 @@ These were three separate plugins until v1.0.0. Same behaviour, same settings, o
 1. Download `embodytools.js` and `changelog.json` from the [latest release](https://github.com/Embody-Games/EGT-EmbodyTools/releases/latest).
 2. Put them **in the same folder**. Blockbench looks for `changelog.json` next to the plugin to fill in the Changelog tab.
 3. In Blockbench: **File > Plugins > Load Plugin from File**, pick `embodytools.js`.
-4. If you had any of the old plugins installed, remove them under **Blockbench > Plugins**. The plugin will tell you if it finds one. Two copies of the same tool share the same setting ids, and whichever one unloads first takes the other's settings with it.
+4. If you had any of the old plugins installed, remove them under **Blockbench > Plugins**: `embodygames_texture_layer_bridge.js`, `anchored_stretch.js`, `one_sided_stretch.js` (the name Anchored Stretch went by before) and `layered_lock_alpha.js`. The plugin will tell you if it finds one. Two copies of the same tool share the same setting ids, and whichever one unloads first takes the other's settings with it.
 
 Do not rename the file. Blockbench works out a file-loaded plugin's id from its filename and refuses to load it if that does not match the id in the code.
 
@@ -41,13 +41,14 @@ Anything that only cares about the model plus flat texture never sees it. For a 
 - Layer groups from Blockbench 5.2 survive. Groups also survive a save from 5.1, which has no groups at all: anything that version cannot represent is carried through untouched rather than dropped.
 - Sidecar format version 3. Sidecars from the older standalone plugin load here, and sidecars written here still load there.
 
-## One-Sided Stretch
+## Anchored Stretch
 
 The Stretch tool scales a cube around its centre, so both faces on an axis move when you drag one handle. Here the dragged face moves and the opposite face stays put.
 
 - **Stretch per Drag Step** replaces stock's snapped-distance maths with a fixed step, so the value lands on round numbers and the tool does not get coarser as you zoom out. `0` picks the format's base scale: `0.015625` for Hytale characters, `0.03125` for props. `0.125` is stock Blockbench.
 - Hold **Shift** for half a step, **Ctrl** for a quarter, both for an eighth. Hold **Alt** while dragging to stretch from the centre.
 - Single-axis handles only. The plane and uniform handles stay centred, same as with the Resize tool.
+- The Vertex Snap tool gets a **Stretch** mode next to Move and Resize: pick a corner, pick a target, and the cube stretches to reach it with the opposite corner anchored. Core has a scale mode that does something similar, but it is hidden in the Hytale formats because scaling breaks integer sizes. Stretching leaves size and UVs alone. A stretch that would put the dragged corner behind the anchored one is clamped rather than turning the cube inside out.
 - It also puts the anchored face back when you **resize** a cube that already has stretch, which core moves because it applies the size change without accounting for the stretch multiplier. Covers the gizmo, the size sliders and keyboard nudges.
 - Only active in formats that support cube stretching, such as the Hytale formats.
 
@@ -64,7 +65,7 @@ The eraser works on an upper layer again too. Lowering alpha is blocked only whe
 `embodytools.js` is one file with no build step: what is in the repo is what Blockbench loads. It is laid out as a short shared prelude, then one section per tool behind a banner like
 
 ```js
-// ===== 2/3  ONE-SIDED STRETCH =====
+// ===== 2/3  ANCHORED STRETCH =====
 ```
 
 Each section is its own closure and shares nothing with the others but the prelude, which is why all three can keep the variable names they had as separate plugins. Registration is at the bottom: one `BBPlugin.register` that walks a `MODULES` list, where every module reports whether it can run here (`blocked()`) and sets itself up and tears itself down (`load()` / `unload()`). A module that cannot run, or that fails on the way up, is skipped with a line in the console and does not take the others with it.
@@ -81,7 +82,7 @@ npm run writes     # how many files one Ctrl+S actually touches
 The suites run against a mock Blockbench (`test/mock_blockbench.js`) with real files on disk, real PNG encode and decode, and real compositing. Every behaviour in the mock was copied from Blockbench's source rather than guessed.
 
 - `test/run_tests.js` and `test/run_tests_52.js` cover Texture Layers, including the 5.2 layer group round-trip. Their mock has no paint or transform machinery on purpose, which also proves the other two modules sit out cleanly.
-- `test/run_tests_modules.js` covers One-Sided Stretch and Layered Lock Alpha, and the bundle plumbing: unload restoring everything, one module sitting out without disturbing the others, and a module failing on the way up being cleaned up rather than left half-loaded.
+- `test/run_tests_modules.js` covers Anchored Stretch and Layered Lock Alpha, and the bundle plumbing: unload restoring everything, one module sitting out without disturbing the others, and a module failing on the way up being cleaned up rather than left half-loaded.
 
 Releases: see [RELEASING.md](RELEASING.md). Never edit the version by hand.
 
