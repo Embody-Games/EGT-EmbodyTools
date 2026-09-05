@@ -194,9 +194,9 @@ check('the paint settings exist',
 	!!settings.lla_enabled && !!settings.lla_clamp && !!settings.lla_allow_erase
 	&& !!settings.lla_include_hidden);
 check('the layer settings exist too, in one plugin',
-	!!settings.embodygames_persist_texture_layers && !!settings.embodygames_watch_layer_files);
+	!!settings.delta_layers_persist && !!settings.delta_layers_watch);
 check('every setting says which plugin owns it',
-	[settings.anchored_stretch_tool, settings.lla_enabled, settings.embodygames_persist_texture_layers]
+	[settings.anchored_stretch_tool, settings.lla_enabled, settings.delta_layers_persist]
 		.every((setting) => setting.plugin === 'embodytools'));
 check('the Lock Alpha tooltip now explains the layer-aware behaviour',
 	BarItems.lock_alpha.description !== CORE_LOCK_ALPHA_TOOLTIP
@@ -536,7 +536,7 @@ check('Cube.prototype.resize restored', Cube.prototype.resize === core_cube_resi
 check('every setting the bundle added is gone', ![
 	'anchored_stretch_tool', 'anchored_stretch_step', 'anchored_stretch_resize',
 	'lla_enabled', 'lla_clamp', 'lla_allow_erase', 'lla_include_hidden',
-	'embodygames_persist_texture_layers', 'embodygames_watch_layer_files',
+	'delta_layers_persist', 'delta_layers_watch',
 ].some((id) => !!settings[id]), Object.keys(settings));
 
 section('11. a module Blockbench cannot host sits out on its own');
@@ -550,8 +550,8 @@ delete globalThis.Cube;
 delete globalThis.Vertexsnap;
 plugin.onload();
 check('the stretch module skipped itself', !settings.anchored_stretch_tool);
-check('Layered Lock Alpha loaded anyway', !!settings.lla_enabled && globalThis.Painter.edit !== core_painter_edit);
-check('Texture Layers loaded anyway', !!settings.embodygames_persist_texture_layers);
+check('UnLeaky Layers loaded anyway', !!settings.lla_enabled && globalThis.Painter.edit !== core_painter_edit);
+check('Delta Layers loaded anyway', !!settings.delta_layers_persist);
 plugin.onunload();
 check('and unloading a partial bundle is still clean',
 	globalThis.Painter.edit === core_painter_edit && !settings.lla_enabled);
@@ -574,7 +574,7 @@ globalThis.TransformerModule = parked_transformer;
 const parked_is_app = globalThis.isApp;
 globalThis.isApp = false;
 plugin.onload();
-check('in the web app Texture Layers sits out', !settings.embodygames_persist_texture_layers);
+check('in the web app Delta Layers sits out', !settings.delta_layers_persist);
 check('and the other two still work', !!settings.anchored_stretch_tool && !!settings.lla_enabled);
 plugin.onunload();
 globalThis.isApp = parked_is_app;
@@ -590,7 +590,7 @@ Object.defineProperty(globalThis.Painter, 'edit', {
 	set() { throw new Error('boom'); },
 });
 plugin.onload();
-check('the other two loaded', !!settings.anchored_stretch_tool && !!settings.embodygames_persist_texture_layers);
+check('the other two loaded', !!settings.anchored_stretch_tool && !!settings.delta_layers_persist);
 check('the half-loaded one was cleaned up, settings and all', !settings.lla_enabled, Object.keys(settings));
 plugin.onunload();
 Object.defineProperty(globalThis.Painter, 'edit', {

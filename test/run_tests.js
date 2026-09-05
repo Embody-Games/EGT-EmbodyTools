@@ -421,14 +421,14 @@ async function reopenModel() {
 	// =====================================================================
 	section('15. watching can be turned off, and stops cleanly');
 	check('watchers are tracked', !!texture.__eg_layer_watcher);
-	globalThis.settings.embodygames_watch_layer_files.value = false;
-	globalThis.settings.embodygames_watch_layer_files.onChange(false);
+	globalThis.settings.delta_layers_watch.value = false;
+	globalThis.settings.delta_layers_watch.onChange(false);
 	check('turning the setting off closes them', !texture.__eg_layer_watcher);
-	globalThis.settings.embodygames_watch_layer_files.value = true;
+	globalThis.settings.delta_layers_watch.value = true;
 
 	// =====================================================================
 	section('10. settings toggle and unload');
-	globalThis.settings.embodygames_persist_texture_layers.value = false;
+	globalThis.settings.delta_layers_persist.value = false;
 	resetProject();
 	fs.rmSync(SIDECAR_PATH, { force: true });
 	fs.rmSync(LAYERS_DIR, { recursive: true, force: true });
@@ -436,16 +436,16 @@ async function reopenModel() {
 	quickSave();
 	await settle();
 	check('nothing is written while the setting is off', !fs.existsSync(SIDECAR_PATH));
-	globalThis.settings.embodygames_persist_texture_layers.value = true;
+	globalThis.settings.delta_layers_persist.value = true;
 
 	const wrapped_write = blockymodel_codec.write;
 	plugin.onunload();
 	check('codec.write restored on unload', blockymodel_codec.write !== wrapped_write);
 	check('wrap marker cleared', blockymodel_codec.__layer_bridge_wrapped === undefined);
-	check('setting removed', globalThis.settings.embodygames_persist_texture_layers === undefined);
+	check('setting removed', globalThis.settings.delta_layers_persist === undefined);
 	check('menu entries removed', Texture.prototype.menu.structure.length === 0,
 		Texture.prototype.menu.structure.length);
-	check('watch setting removed', globalThis.settings.embodygames_watch_layer_files === undefined);
+	check('watch setting removed', globalThis.settings.delta_layers_watch === undefined);
 	resetProject();
 	await buildLayeredTexture();
 	fs.rmSync(SIDECAR_PATH, { force: true });

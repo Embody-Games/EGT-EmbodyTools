@@ -111,7 +111,7 @@ check('the filename and the plugin id agree', () => {
 });
 
 check('all three modules are wired into MODULES', () => {
-	assert(/const MODULES = \[TextureLayersModule, AnchoredStretchModule, LayeredLockAlphaModule\];/.test(source),
+	assert(/const MODULES = \[DeltaLayersModule, AnchoredStretchModule, UnLeakyLayersModule\];/.test(source),
 		'the MODULES list is not the three modules');
 });
 
@@ -124,7 +124,7 @@ check('every module has blocked, load and unload', () => {
 
 check('each module is still there, by the settings it owns', () => {
 	// A module quietly lost in a merge is the failure this catches.
-	for (const id of ['embodygames_persist_texture_layers', 'anchored_stretch_step', 'lla_enabled']) {
+	for (const id of ['delta_layers_persist', 'anchored_stretch_step', 'lla_enabled']) {
 		assert(source.includes(`'${id}'`), `no sign of the setting ${id}`);
 	}
 });
@@ -137,7 +137,7 @@ check('the embedded icon is the repo\'s own art', () => {
 
 check('the module banners are intact', () => {
 	// They are how you find your way around a 2600 line file. Keep them.
-	for (const banner of ['1/3  TEXTURE LAYERS', '2/3  ANCHORED STRETCH', '3/3  LAYERED LOCK ALPHA']) {
+	for (const banner of ['1/3  DELTA LAYERS', '2/3  ANCHORED STRETCH', '3/3  UNLEAKY LAYERS']) {
 		assert(source.includes(banner), `the "${banner}" banner is gone`);
 	}
 });

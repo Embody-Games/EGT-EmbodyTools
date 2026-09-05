@@ -4,9 +4,9 @@ Embody Games' Blockbench toolset: three tools in one plugin.
 
 | Tool | What it does | Where its settings live |
 | --- | --- | --- |
-| **Texture Layers** | Keeps a texture's layer stack alive across a save and reload for formats that cannot store layers, such as Hytale's `.blockymodel`. Desktop app only. | Settings > Export |
+| **Delta Layers** | Keeps a texture's layer stack alive across a save and reload for formats that cannot store layers, such as Hytale's `.blockymodel`. Desktop app only. | Settings > Export |
 | **Anchored Stretch** | Makes the Stretch tool move only the face you drag, stops resizing a stretched cube from creeping outward on the anchored side, and adds a Stretch mode to Vertex Snap. | Settings > Edit |
-| **Layered Lock Alpha** | Makes Lock Alpha Channel look at every layer, so you can paint on an empty layer above your artwork. | Settings > Paint |
+| **UnLeaky Layers** | Makes Lock Alpha Channel look at every layer, so you can paint on an empty layer above your artwork. | Settings > Paint |
 
 These were three separate plugins until v1.0.0. Same behaviour, same settings, one file to hand out.
 
@@ -15,13 +15,13 @@ These were three separate plugins until v1.0.0. Same behaviour, same settings, o
 1. Download `embodytools.js` and `changelog.json` from the [latest release](https://github.com/Embody-Games/EGT-EmbodyTools/releases/latest).
 2. Put them **in the same folder**. Blockbench looks for `changelog.json` next to the plugin to fill in the Changelog tab.
 3. In Blockbench: **File > Plugins > Load Plugin from File**, pick `embodytools.js`.
-4. If you had any of the old plugins installed, remove them under **Blockbench > Plugins**: `embodygames_texture_layer_bridge.js`, `anchored_stretch.js`, `one_sided_stretch.js` (the name Anchored Stretch went by before) and `layered_lock_alpha.js`. The plugin will tell you if it finds one. Two copies of the same tool share the same setting ids, and whichever one unloads first takes the other's settings with it.
+4. If you had any of the old plugins installed, remove them under **Blockbench > Plugins**: `delta_layers.js`, `anchored_stretch.js` and `unleakylayers.js`, plus the names they went by before: `embodygames_texture_layer_bridge.js`, `one_sided_stretch.js` and `layered_lock_alpha.js`. The plugin will tell you if it finds one. Two copies of the same tool share the same setting ids, and whichever one unloads first takes the other's settings with it.
 
 Do not rename the file. Blockbench works out a file-loaded plugin's id from its filename and refuses to load it if that does not match the id in the code.
 
-Needs Blockbench **5.0.5** or newer. In the web app the other two tools work and Texture Layers sits out, since it needs real filesystem access.
+Needs Blockbench **5.0.5** or newer. In the web app the other two tools work and Delta Layers sits out, since it needs real filesystem access.
 
-## Texture Layers
+## Delta Layers
 
 Blockbench keeps layers in `.bbmodel` files only. Save to anything else, Hytale's `.blockymodel` included, and you get a flat PNG: the stack is gone when the model is reopened. This keeps it, without touching the model file, by writing a sidecar next to the texture:
 
@@ -52,7 +52,7 @@ The Stretch tool scales a cube around its centre, so both faces on an axis move 
 - It also puts the anchored face back when you **resize** a cube that already has stretch, which core moves because it applies the size change without accounting for the stretch multiplier. Covers the gizmo, the size sliders and keyboard nudges.
 - Only active in formats that support cube stretching, such as the Hytale formats.
 
-## Layered Lock Alpha
+## UnLeaky Layers
 
 Written by quinten.bench.
 
@@ -86,8 +86,8 @@ npm run icon       # re-embed embody_tools_icon.png after changing it
 
 The suites run against a mock Blockbench (`test/mock_blockbench.js`) with real files on disk, real PNG encode and decode, and real compositing. Every behaviour in the mock was copied from Blockbench's source rather than guessed.
 
-- `test/run_tests.js` and `test/run_tests_52.js` cover Texture Layers, including the 5.2 layer group round-trip. Their mock has no paint or transform machinery on purpose, which also proves the other two modules sit out cleanly.
-- `test/run_tests_modules.js` covers Anchored Stretch and Layered Lock Alpha, and the bundle plumbing: unload restoring everything, one module sitting out without disturbing the others, and a module failing on the way up being cleaned up rather than left half-loaded.
+- `test/run_tests.js` and `test/run_tests_52.js` cover Delta Layers, including the 5.2 layer group round-trip. Their mock has no paint or transform machinery on purpose, which also proves the other two modules sit out cleanly.
+- `test/run_tests_modules.js` covers Anchored Stretch and UnLeaky Layers, and the bundle plumbing: unload restoring everything, one module sitting out without disturbing the others, and a module failing on the way up being cleaned up rather than left half-loaded.
 
 Releases: see [RELEASING.md](RELEASING.md). Never edit the version by hand.
 

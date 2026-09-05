@@ -75,6 +75,15 @@ if (!categories.size) die('a release needs at least one --added/--changed/--fixe
 
 // ------------------------------------------------------------------ checks first
 
+// A release commits a fixed list of files, so anything else left dirty in the tree
+// silently does not go out with it. That has already shipped a tag whose own tests were
+// stale twice, so: clean tree or no release.
+const dirty = run('git', ['status', '--porcelain']);
+if (dirty) {
+	die('the working tree is not clean, so a release would leave these behind:\n'
+		+ dirty + '\nCommit or stash them first.');
+}
+
 console.log('running checks before touching anything...\n');
 try {
 	execFileSync(process.execPath, [join(root, 'scripts/verify.mjs')], { cwd: root, stdio: 'inherit' });
