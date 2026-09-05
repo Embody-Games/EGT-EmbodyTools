@@ -52,7 +52,7 @@
 
 // Must match the filename: embodytools.js
 const PLUGIN_ID = 'embodytools';
-const PLUGIN_VERSION = '1.0.2';
+const PLUGIN_VERSION = '1.1.0';
 
 // The plugin icon, embedded so this stays a single file wherever it is loaded from;
 // Blockbench's getIconNode takes any data:image/ URL. The art is embody_tools_icon.png
@@ -1207,10 +1207,10 @@ const DeltaLayersModule = (function () {
 		// The marker deliberately does NOT include the plugin id: if an older copy of this
 		// plugin is still loaded under its previous name, we want it to stop us wrapping the
 		// same codec twice rather than both of us writing the same sidecars on every save.
-		if (!codec || codec.__layer_bridge_wrapped || !codecNeedsLayerBridge(codec)) return;
+		if (!codec || codec.__delta_layers_wrapped || !codecNeedsLayerBridge(codec)) return;
 		if (typeof codec.write !== 'function' || typeof codec.parse !== 'function') return;
 
-		codec.__layer_bridge_wrapped = true;
+		codec.__delta_layers_wrapped = true;
 		codec.__delta_layers_write = codec.write;
 		codec.__delta_layers_parse = codec.parse;
 		wrapped_codecs.push(codec);
@@ -1262,7 +1262,7 @@ const DeltaLayersModule = (function () {
 				if (codec.__delta_layers_parse) codec.parse = codec.__delta_layers_parse;
 				delete codec.__delta_layers_write;
 				delete codec.__delta_layers_parse;
-				delete codec.__layer_bridge_wrapped;
+				delete codec.__delta_layers_wrapped;
 			} catch (error) {
 				fail('could not unhook a codec', error);
 			}
@@ -2624,22 +2624,13 @@ const UnLeakyLayersModule = (function () {
 
 const MODULES = [DeltaLayersModule, AnchoredStretchModule, UnLeakyLayersModule];
 
-// The plugins each module used to be, for the "you still have the old one installed"
-// warning below. Anchored Stretch has two: it was called One-Sided Stretch before, and
-// that older one patches the same stretch tool under different setting ids.
+// The standalone plugin each module is, for the "you still have that one installed"
+// warning below. Only the current names: the ones these went by before are not something
+// this has to keep working with.
 const REPLACES = {
-	delta_layers: [
-		{ id: 'delta_layers', name: 'Delta Layers' },
-		{ id: 'embodygames_texture_layer_bridge', name: 'Embody Games Texture Layers' },
-	],
-	anchored_stretch: [
-		{ id: 'anchored_stretch', name: 'Anchored Stretch' },
-		{ id: 'one_sided_stretch', name: 'One-Sided Stretch' },
-	],
-	unleakylayers: [
-		{ id: 'unleakylayers', name: 'UnLeaky Layers' },
-		{ id: 'layered_lock_alpha', name: 'Layered Lock Alpha' },
-	],
+	delta_layers: [{ id: 'delta_layers', name: 'Delta Layers' }],
+	anchored_stretch: [{ id: 'anchored_stretch', name: 'Anchored Stretch' }],
+	unleakylayers: [{ id: 'unleakylayers', name: 'UnLeaky Layers' }],
 };
 
 const TAG = '[embodytools]';
