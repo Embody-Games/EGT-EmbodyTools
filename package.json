@@ -12,6 +12,7 @@
   "scripts": {
     "test": "node scripts/verify.mjs",
     "check": "node scripts/verify.mjs --quick",
+    "icon": "node scripts/icon.mjs",
     "writes": "node test/count_writes.js",
     "changelog": "node scripts/changelog.mjs",
     "release": "node scripts/release.mjs"

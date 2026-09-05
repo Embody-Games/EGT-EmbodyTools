@@ -72,11 +72,16 @@ Each section is its own closure and shares nothing with the others but the prelu
 
 To add a tool: add a section, return the same fields, put it in `MODULES`.
 
+The one thing that is not just the file is the icon: `embody_tools_icon.png` is the art, and
+it is embedded in `embodytools.js` as a data URL so the plugin stays a single file. Edit the
+PNG, run `npm run icon`, and the checks will tell you if you forget.
+
 ```sh
 npm install        # canvas, which the suites need for real PNG encode and decode
 npm test           # static checks, then all three suites
 npm run check      # static checks only, no suites
 npm run writes     # how many files one Ctrl+S actually touches
+npm run icon       # re-embed embody_tools_icon.png after changing it
 ```
 
 The suites run against a mock Blockbench (`test/mock_blockbench.js`) with real files on disk, real PNG encode and decode, and real compositing. Every behaviour in the mock was copied from Blockbench's source rather than guessed.

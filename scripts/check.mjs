@@ -129,6 +129,12 @@ check('each module is still there, by the settings it owns', () => {
 	}
 });
 
+check('the embedded icon is the repo\'s own art', () => {
+	// One file with no build step means the icon has to be copied in by hand, so the
+	// one thing worth checking is that somebody remembered to.
+	execFileSync(process.execPath, [join(root, 'scripts/icon.mjs'), '--check'], { stdio: 'pipe' });
+});
+
 check('the module banners are intact', () => {
 	// They are how you find your way around a 2600 line file. Keep them.
 	for (const banner of ['1/3  TEXTURE LAYERS', '2/3  ANCHORED STRETCH', '3/3  LAYERED LOCK ALPHA']) {
