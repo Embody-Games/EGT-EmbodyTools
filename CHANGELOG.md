@@ -2,6 +2,19 @@
 
 Generated from `changelog.json` by `scripts/changelog.mjs`. Edit that file, not this one.
 
+## v1.2.0 - Anchored Stretch 1.8.1
+
+_2026-09-06_
+
+### Added
+
+- Anchored Stretch comes in at its 1.8.1 behaviour. The Vertex Snap tool gets a second mode next to Stretch: Resize + Stretch puts as much of the gap as it can into whole units of size and leaves only the remainder in stretch, so the cube reaches the target without landing on an odd stretch value.
+- Anchored Stretch adds a Bake Stretch into Size button next to the stretch sliders. It rolls a cube's stretch into whole units of size without moving it on screen, leaving stretch holding only the fraction that will not fit in a whole unit.
+
+### Fixed
+
+- Stretch values from a vertex snap are rounded to six decimals, so a gap that should be a whole number stops reading as 0.999999999.
+
 ## v1.1.0 - Delta Layers and UnLeaky Layers
 
 _2026-09-05_

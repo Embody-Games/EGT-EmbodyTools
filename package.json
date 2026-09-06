@@ -1,6 +1,6 @@
 {
   "name": "egt-embodytools",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "description": "EmbodyTools - Embody Games' Blockbench toolset: texture layer persistence, one-sided stretch, layer-aware lock alpha",
   "author": "Embody Games",
