@@ -10,6 +10,7 @@ jobs:
   announce:
     runs-on: ubuntu-latest
     env:
+      PLUGIN_FILE: embodytools.js
       PLUGIN_NAME: EmbodyTools
       PLUGIN_ICON_URL: https://raw.githubusercontent.com/Embody-Games/EGT-EmbodyTools/main/embody_tools_icon.png
       PLUGIN_COLOR: 5865F2
