@@ -13,7 +13,7 @@
  *   2. ANCHORED STRETCH    Makes the Stretch tool move only the face you drag, stops
  *                          resizing a stretched cube from creeping outward on the
  *                          anchored side, and adds a Stretch mode to Vertex Snap.
- *                          Settings > Edit.     Was: anchored_stretch 1.8.1
+ *                          Settings > Edit.     Was: anchored_stretch 1.8.2
  *
  *   3. UNLEAKY LAYERS      Makes Lock Alpha Channel look at every layer, so you can
  *                          paint on an empty layer above your artwork.
@@ -1869,6 +1869,14 @@ const AnchoredStretchModule = (function () {
 				setWholeSize(element, axis, fit, anchored, high);
 				clamped = clamped || fit.clamped;
 				changed = true;
+
+				// Per-face UV rectangles do not follow the size on their own. Core's
+				// resize() calls this straight after each axis changes; the whole-size
+				// paths set from/to directly, so they have to call it themselves.
+				// Direction matches core's `negative ? -1 : 1`: the side that grew.
+				if (typeof element.mapAutoUV === 'function') {
+					element.mapAutoUV({axis, direction: high ? 1 : -1});
+				}
 				continue;
 			}
 
@@ -1987,6 +1995,10 @@ const AnchoredStretchModule = (function () {
 			for (let {axis, fit} of per_axis) {
 				// The extent is preserved, so holding the low face holds both faces
 				setWholeSize(cube, axis, fit, renderedFace(cube, axis, false), true);
+				// Neither side grew on screen, so this is core's bidirectional case
+				if (typeof cube.mapAutoUV === 'function') {
+					cube.mapAutoUV({axis, direction: 0});
+				}
 			}
 			if (cube.visibility !== false && cube.preview_controller) {
 				if (cube.preview_controller.updateGeometry) cube.preview_controller.updateGeometry(cube);
