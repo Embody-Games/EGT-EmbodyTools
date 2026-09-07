@@ -2,6 +2,14 @@
 
 Generated from `changelog.json` by `scripts/changelog.mjs`. Edit that file, not this one.
 
+## v1.2.1 - UV follows the size
+
+_2026-09-07_
+
+### Fixed
+
+- Anchored Stretch: the UV map now follows the cube when Resize + Stretch or Bake Stretch into Size changes its size. The texels the resize added were missing from the UV map until you nudged a face by hand. Comes in at anchored_stretch 1.8.2.
+
 ## v1.2.0 - Anchored Stretch 1.8.1
 
 _2026-09-06_

@@ -1,4 +1,17 @@
 {
+  "1.2.1": {
+    "title": "UV follows the size",
+    "date": "2026-09-07",
+    "author": "Embody Games",
+    "categories": [
+      {
+        "title": "Fixed",
+        "list": [
+          "Anchored Stretch: the UV map now follows the cube when Resize + Stretch or Bake Stretch into Size changes its size. The texels the resize added were missing from the UV map until you nudged a face by hand. Comes in at anchored_stretch 1.8.2."
+        ]
+      }
+    ]
+  },
   "1.2.0": {
     "title": "Anchored Stretch 1.8.1",
     "date": "2026-09-06",
