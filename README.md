@@ -49,6 +49,9 @@ The Stretch tool scales a cube around its centre, so both faces on an axis move 
 - Hold **Shift** for half a step, **Ctrl** for a quarter, both for an eighth. Hold **Alt** while dragging to stretch from the centre.
 - Single-axis handles only. The plane and uniform handles stay centred, same as with the Resize tool.
 - The Vertex Snap tool gets a **Stretch** mode next to Move and Resize: pick a corner, pick a target, and the cube stretches to reach it with the opposite corner anchored. Core has a scale mode that does something similar, but it is hidden in the Hytale formats because scaling breaks integer sizes. Stretching leaves size and UVs alone. A stretch that would put the dragged corner behind the anchored one is clamped rather than turning the cube inside out.
+- The snap dropdown also gets **Resize + Stretch**, which closes the gap with whole units of size first and leaves stretch holding only the fraction that will not fit, so most of the face keeps real texture resolution rather than a stretched pixel.
+- **Bake Stretch into Size**, next to the stretch sliders, does the same sum with no gap to close: each selected cube's stretch is rolled into whole units of size without the cube moving at all.
+- A **Resize + Stretch** tool sits next to the Stretch tool in the toolbar and does that split on an ordinary resize drag. Nothing held resizes in whole units, **Shift** halves the step, **Ctrl** quarters it, both together stop snapping. The face you are not dragging stays where it is.
 - It also puts the anchored face back when you **resize** a cube that already has stretch, which core moves because it applies the size change without accounting for the stretch multiplier. Covers the gizmo, the size sliders and keyboard nudges.
 - Only active in formats that support cube stretching, such as the Hytale formats.
 

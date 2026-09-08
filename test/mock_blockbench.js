@@ -295,15 +295,55 @@ class Setting {
 g.Setting = Setting;
 
 g.BarItems = {};
+/*
+ * Core's BarItem remembers the toolbars it was added to and takes itself back out
+ * in delete(), which is what a plugin relies on to unhook cleanly. A stand-in that
+ * only forgets the id would pass an unload that leaves a dead button on a toolbar.
+ */
 class Action {
 	constructor(id, data) {
 		this.id = id;
+		this.toolbars = [];
 		g.BarItems[id] = this;
 		Object.assign(this, data);
 	}
-	delete() { delete g.BarItems[this.id]; }
+	delete() {
+		this.toolbars.slice().forEach((bar) => bar.remove(this));
+		delete g.BarItems[this.id];
+	}
 }
 g.Action = Action;
+
+class Tool extends Action {
+	select() { if (g.Toolbox) g.Toolbox.selected = this; return this; }
+}
+g.Tool = Tool;
+
+class Toolbar {
+	constructor(id) { this.id = id; this.children = []; }
+	add(item, position) {
+		if (position === undefined) position = this.children.length;
+		this.children.splice(position, 0, item);
+		if (item.toolbars) item.toolbars.push(this);
+		return this;
+	}
+	remove(item) {
+		const i = this.children.indexOf(item);
+		if (i !== -1) this.children.splice(i, 1);
+		const j = item.toolbars ? item.toolbars.indexOf(this) : -1;
+		if (j !== -1) item.toolbars.splice(j, 1);
+		return this;
+	}
+}
+g.Toolbar = Toolbar;
+g.Toolbars = {
+	element_stretch: new Toolbar('element_stretch'),
+	tools: new Toolbar('tools'),
+};
+// The stock tool order, so "insert after the stretch tool" has something to find.
+g.Toolbars.tools.children.push('move_tool', 'resize_tool', 'rotate_tool', 'vertex_snap_tool', 'stretch_tool', 'knife_tool');
+// Only needed so a tool being deleted has somewhere to send the selection.
+new Tool('resize_tool', { name: 'Resize' });
 
 g.Panels = { layers: { inside_vue: { layers: [] } } };
 g.BARS = { updateConditions() {} };

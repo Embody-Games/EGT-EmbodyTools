@@ -80,7 +80,8 @@ const CORE_LOCK_ALPHA_TOOLTIP = globalThis.BarItems.lock_alpha.description;
 const core_calls = [];
 const core_edit_module = {
 	calculateOffset(context) { core_calls.push('calculateOffset'); return 'CORE_OFFSET'; },
-	onStart(context) { core_calls.push('onStart'); return 'CORE_START'; },
+	// Core opens the undo entry here for every tool, so the stand-in has to as well
+	onStart(context) { core_calls.push('onStart'); Undo.initEdit({ elements: globalThis.Outliner.selected.slice() }); return 'CORE_START'; },
 	onMove(context) { core_calls.push('onMove'); return 'CORE_MOVE'; },
 	onEnd(context) { core_calls.push('onEnd'); return 'CORE_END'; },
 	onCancel(context) { core_calls.push('onCancel'); return 'CORE_CANCEL'; },
@@ -91,6 +92,13 @@ const edit_module = globalThis.TransformerModule.modules.edit;
 globalThis.Outliner = { selected: [] };
 globalThis.Pressing = { overrides: {} };
 globalThis.trimFloatNumber = (number) => String(number);
+let undo_edits = 0;
+let undo_finishes = 0;
+let undo_last_name = null;
+globalThis.Undo = {
+	initEdit() { undo_edits++; },
+	finishEdit(name) { undo_finishes++; undo_last_name = name; },
+};
 globalThis.updateNslideValues = function () {};
 
 /*
@@ -361,11 +369,80 @@ check('and so does moving the origin, which is core\'s job either way',
 	Vertexsnap.snap({}, 0) === 'CORE_SNAP' && core_snap_calls === snaps + 1);
 Vertexsnap.move_origin = false;
 
+section('6. the Resize + Stretch tool');
+const resize_stretch = BarItems.anchored_resize_stretch_tool;
+check('the tool is registered', !!resize_stretch);
+check('as a Tool, so Blockbench treats it as one', resize_stretch instanceof globalThis.Tool);
+check('it is named for what it does', resize_stretch.name === 'Resize + Stretch', resize_stretch.name);
+check('and drives the resize gizmo, not the stretch one',
+	resize_stretch.transformerMode === 'scale', resize_stretch.transformerMode);
+check('it only offers itself in a format that stretches',
+	resize_stretch.condition.features[0] === 'stretch_cubes', resize_stretch.condition);
+const tool_ids = globalThis.Toolbars.tools.children.map((child) => (child && child.id) || child);
+check('it sits right after the Stretch tool in the toolbar',
+	tool_ids[tool_ids.indexOf('stretch_tool') + 1] === 'anchored_resize_stretch_tool', tool_ids);
+check('and Bake Stretch into Size sits next to the stretch sliders',
+	globalThis.Toolbars.element_stretch.children.includes(BarItems.anchored_stretch_bake));
+
+globalThis.Toolbox.selected = resize_stretch;
+const toolOffset = (x, event) => edit_module.calculateOffset(
+	{ point: { x, y: 0, z: 0 }, axis: 'x', direction: 1, event: event || {} });
+
+check('nothing held snaps to whole units, like a plain resize', toolOffset(2.3) === 2, toolOffset(2.3));
+check('Shift halves the step', near(toolOffset(2.3, { shiftKey: true }), 2.5), toolOffset(2.3, { shiftKey: true }));
+check('Ctrl quarters it', near(toolOffset(2.3, { ctrlKey: true }), 2.25), toolOffset(2.3, { ctrlKey: true }));
+check('both together stop snapping altogether',
+	near(toolOffset(2.3, { shiftKey: true, ctrlKey: true }), 2.3),
+	toolOffset(2.3, { shiftKey: true, ctrlKey: true }));
+
+/**
+ * One drag with the tool selected. `value` is what calculateOffset worked out, so
+ * it is negative on a negative handle, the same way core feeds resize().
+ */
+function toolDrag(target, value, direction) {
+	globalThis.Outliner.selected = [target];
+	undo_edits = undo_finishes = 0;
+	edit_module.onStart({ event: {} });
+	edit_module.onMove({ event: {}, point: { x: value, y: 0, z: 0 }, axis: 'x', axis_number: 0, direction, value });
+	edit_module.onEnd({ event: {}, has_changed: true, keep_changes: true });
+	globalThis.Outliner.selected = [];
+}
+
+cube = new Cube([0, 0, 0], [8, 8, 8]);
+toolDrag(cube, 2.25, 1);
+check('the whole part of the gap went into size', cube.size(0) === 10, cube.size(0));
+check('and stretch was left holding only the fraction', near(cube.stretch[0], 1.025), cube.stretch[0]);
+check('the dragged face moved by the whole amount asked for',
+	near(renderedFace(cube, 0, true), 10.25), renderedFace(cube, 0, true));
+check('while the anchored face did not move at all',
+	near(renderedFace(cube, 0, false), 0), renderedFace(cube, 0, false));
+check('the drag was one undo entry, named for the tool',
+	undo_edits === 1 && undo_finishes === 1 && undo_last_name === 'Resize and stretch',
+	[undo_edits, undo_finishes, undo_last_name]);
+
+cube = new Cube([0, 0, 0], [8, 8, 8]);
+toolDrag(cube, -2.25, -1);
+check('the negative handle holds the other face instead',
+	near(renderedFace(cube, 0, true), 8) && near(renderedFace(cube, 0, false), -2.25),
+	[renderedFace(cube, 0, false), renderedFace(cube, 0, true)]);
+
+cube = new Cube([0, 0, 0], [8, 8, 8], [1.5, 1, 1]);
+toolDrag(cube, 0.3, 1);
+check('stretch the cube already had is absorbed into whole units, not compounded',
+	cube.size(0) === 12 && near(cube.stretch[0], 1.025), [cube.size(0), cube.stretch[0]]);
+
+cube = new Cube([0, 0, 0], [8, 8, 8]);
+toolDrag(cube, 2, 1);
+check('a gap that comes out whole leaves the stretch at exactly 1',
+	cube.size(0) === 10 && cube.stretch[0] === 1, [cube.size(0), cube.stretch[0]]);
+
+globalThis.Toolbox.selected = { id: 'stretch_tool' };
+
 // ===========================================================================
 // Layered Lock Alpha
 // ===========================================================================
 
-section('6. Lock Alpha looks at every layer');
+section('7. Lock Alpha looks at every layer');
 
 /** A texture with layers, and pixels painted by hand. */
 function layeredTexture(size, paint_layers) {
@@ -453,7 +530,7 @@ check('with Lock Alpha off the brush is not clipped at all',
 	pixel(top, 12, 2)[3] === 255, pixel(top, 12, 2));
 Painter.lock_alpha = true;
 
-section('7. erasing an upper layer reveals what is under it');
+section('8. erasing an upper layer reveals what is under it');
 /** Erase the left 4 columns, the way the eraser does. */
 function eraseStripe(texture) {
 	Painter.edit(texture, (canvas) => {
@@ -487,7 +564,7 @@ check('and the setting can freeze alpha outright, like vanilla',
 settings.lla_allow_erase.value = true;
 globalThis.Toolbox.selected = { id: 'brush_tool' };
 
-section('8. hidden layers only count when you say so');
+section('9. hidden layers only count when you say so');
 const HIDE_IT = (ctx) => { ctx.fillStyle = '#ff0000'; ctx.fillRect(0, 0, 16, 16); };
 texture = layeredTexture(16, [HIDE_IT, EMPTY]);
 texture.layers[0].visible = false;
@@ -503,7 +580,7 @@ paintGreen(texture);
 check('unless the setting says to count it', pixel(top, 4, 4)[3] === 255, pixel(top, 4, 4));
 settings.lla_include_hidden.value = false;
 
-section('9. the stroke hooks are handed through to core');
+section('10. the stroke hooks are handed through to core');
 const started_before = paint_started;
 Painter.startPaintTool('a', 'b');
 Painter.stopPaintTool();
@@ -514,9 +591,13 @@ check('stopPaintTool too', paint_stopped >= 1);
 // bundle plumbing
 // ===========================================================================
 
-section('10. unload puts Blockbench back exactly as it was');
+section('11. unload puts Blockbench back exactly as it was');
 snap_mode.value = 'stretch'; // the mode about to be taken away is the one selected
+globalThis.Toolbox.selected = BarItems.anchored_resize_stretch_tool; // so is the tool
 plugin.onunload();
+check('the tool being taken away handed the selection back to Resize',
+	globalThis.Toolbox.selected && globalThis.Toolbox.selected.id === 'resize_tool',
+	globalThis.Toolbox.selected && globalThis.Toolbox.selected.id);
 check('Vertexsnap.snap restored', Vertexsnap.snap === core_vertex_snap);
 check('the Stretch mode is out of the dropdown again',
 	!snap_mode.options.stretch && !snap_mode.values.includes('stretch'), snap_mode.values);
@@ -533,13 +614,21 @@ check('the transform edit module restored',
 	&& edit_module.onEnd === core_edit_module.onEnd
 	&& edit_module.onCancel === core_edit_module.onCancel);
 check('Cube.prototype.resize restored', Cube.prototype.resize === core_cube_resize);
+check('the Resize + Stretch tool is gone from BarItems',
+	!BarItems.anchored_resize_stretch_tool, Object.keys(BarItems));
+check('and out of the tools toolbar with it',
+	!globalThis.Toolbars.tools.children.some((child) => child && child.id === 'anchored_resize_stretch_tool'),
+	globalThis.Toolbars.tools.children.map((child) => (child && child.id) || child));
+check('the Bake Stretch into Size button is out of the stretch toolbar',
+	globalThis.Toolbars.element_stretch.children.length === 0,
+	globalThis.Toolbars.element_stretch.children.length);
 check('every setting the bundle added is gone', ![
 	'anchored_stretch_tool', 'anchored_stretch_step', 'anchored_stretch_resize',
 	'lla_enabled', 'lla_clamp', 'lla_allow_erase', 'lla_include_hidden',
 	'delta_layers_persist', 'delta_layers_watch',
 ].some((id) => !!settings[id]), Object.keys(settings));
 
-section('11. a module Blockbench cannot host sits out on its own');
+section('12. a module Blockbench cannot host sits out on its own');
 // Anchored Stretch has three hooks and gives up on each separately, so it only sits
 // out when all three are gone. Take the lot away and the other two must not care.
 const parked_transformer = globalThis.TransformerModule;
@@ -579,7 +668,7 @@ check('and the other two still work', !!settings.anchored_stretch_tool && !!sett
 plugin.onunload();
 globalThis.isApp = parked_is_app;
 
-section('12. a module that throws while starting up does not take the others with it');
+section('13. a module that throws while starting up does not take the others with it');
 console.log('       (the stack traces below are on purpose: a hook is being broken deliberately)');
 const parked_painter_edit = globalThis.Painter.edit;
 // Painter.edit still reads as a function, so the module is not skipped: it gets part
