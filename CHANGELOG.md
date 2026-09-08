@@ -2,6 +2,14 @@
 
 Generated from `changelog.json` by `scripts/changelog.mjs`. Edit that file, not this one.
 
+## v1.2.2 - UV panel repaints straight away
+
+_2026-09-08_
+
+### Fixed
+
+- Anchored Stretch: the UV map redraws as soon as Resize + Stretch or Bake Stretch into Size changes a cube, instead of waiting until you move the pointer over the UV panel. Comes in at anchored_stretch 1.8.3.
+
 ## v1.2.1 - UV follows the size
 
 _2026-09-07_

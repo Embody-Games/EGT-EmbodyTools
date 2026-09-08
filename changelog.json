@@ -1,4 +1,17 @@
 {
+  "1.2.2": {
+    "title": "UV panel repaints straight away",
+    "date": "2026-09-08",
+    "author": "Embody Games",
+    "categories": [
+      {
+        "title": "Fixed",
+        "list": [
+          "Anchored Stretch: the UV map redraws as soon as Resize + Stretch or Bake Stretch into Size changes a cube, instead of waiting until you move the pointer over the UV panel. Comes in at anchored_stretch 1.8.3."
+        ]
+      }
+    ]
+  },
   "1.2.1": {
     "title": "UV follows the size",
     "date": "2026-09-07",
