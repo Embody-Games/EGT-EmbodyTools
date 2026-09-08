@@ -2,6 +2,15 @@
 
 Generated from `changelog.json` by `scripts/changelog.mjs`. Edit that file, not this one.
 
+## v1.3.0 - Resize + Stretch tool
+
+_2026-09-08_
+
+### Added
+
+- Anchored Stretch adds a Resize + Stretch tool to the toolbar, next to the Stretch tool. It resizes a cube in whole units of size and lets stretch cover only the fraction that will not fit, so most of the cube keeps real texture resolution and the face you are not dragging stays where it is. Comes in at anchored_stretch 1.9.1.
+- The new tool follows the resize ladder rather than the stretch one: nothing held moves in whole units, Shift halves the step, Ctrl quarters it, and both together stop snapping so you can land anywhere.
+
 ## v1.2.2 - UV panel repaints straight away
 
 _2026-09-08_
