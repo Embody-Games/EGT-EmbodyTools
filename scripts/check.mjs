@@ -118,15 +118,15 @@ check('the filename and the plugin id agree', () => {
 	assert(from_file === declared, `${basename(PLUGIN)} declares the id ${declared}`);
 });
 
-check('all three modules are wired into MODULES', () => {
-	assert(/const MODULES = \[DeltaLayersModule, AnchoredStretchModule, UnLeakyLayersModule\];/.test(source),
-		'the MODULES list is not the three modules');
+check('all four modules are wired into MODULES', () => {
+	assert(/const MODULES = \[DeltaLayersModule, AnchoredStretchModule, UnLeakyLayersModule, GradientMapLayerModule\];/.test(source),
+		'the MODULES list is not the four modules');
 });
 
 check('every module has blocked, load and unload', () => {
 	for (const name of ['blocked', 'load', 'unload']) {
 		const hits = source.match(new RegExp(`^\\t\\t${name}\\(\\) \\{`, 'gm')) || [];
-		assert(hits.length === 3, `found ${hits.length} ${name}() implementations, expected 3`);
+		assert(hits.length === 4, `found ${hits.length} ${name}() implementations, expected 4`);
 	}
 });
 
@@ -135,6 +135,8 @@ check('each module is still there, by the settings it owns', () => {
 	for (const id of ['delta_layers_persist', 'anchored_stretch_step', 'lla_enabled']) {
 		assert(source.includes(`'${id}'`), `no sign of the setting ${id}`);
 	}
+	// Gradient Map Layer has no settings, so its own action id stands in for it.
+	assert(source.includes("new Action('gradient_map_layer'"), 'no sign of Gradient Map Layer');
 });
 
 check('the embedded icon is the repo\'s own art', () => {
@@ -145,8 +147,9 @@ check('the embedded icon is the repo\'s own art', () => {
 });
 
 check('the module banners are intact', () => {
-	// They are how you find your way around a 2600 line file. Keep them.
-	for (const banner of ['1/3  DELTA LAYERS', '2/3  ANCHORED STRETCH', '3/3  UNLEAKY LAYERS']) {
+	// They are how you find your way around a 6600 line file. Keep them.
+	for (const banner of ['1/4  DELTA LAYERS', '2/4  ANCHORED STRETCH', '3/4  UNLEAKY LAYERS',
+		'4/4  GRADIENT MAP LAYER']) {
 		assert(source.includes(banner), `the "${banner}" banner is gone`);
 	}
 });

@@ -44,19 +44,24 @@
 
 // Must match the filename: unleakylayers.js
 const PLUGIN_ID = 'unleakylayers';
-const PLUGIN_VERSION = '1.2.1';   // single source of truth, bumped by scripts/release.mjs
+const PLUGIN_VERSION = '1.3.2';   // single source of truth, bumped by scripts/release.mjs
 const LOG = '[UnLeaky Layers]';
 
 const MUTATORS = ['fill', 'fillRect', 'stroke', 'strokeRect', 'clearRect', 'drawImage'];
 
+// The only two tools Blockbench builds a Painter.current.clear for. See getStrokeBaseline.
+const CLEAR_TOOLS = ['draw_shape_tool', 'gradient_tool'];
+
 let originals = {};
 let added_settings = [];
+let toolbar_toggle = null;   // the Layer-Aware Alpha Lock button in the paint toolbar
 let original_lock_alpha_description = null;
 
 // Per-stroke caches
 let stroke_active = false;
 let stroke_masks = new Map();   // texture uuid -> {width, height, alpha: Uint8Array}
 let baseline_cache = null;      // {canvas, data: ImageData} for shape / gradient tools
+let stroke_uses_clear = false;  // this stroke is one Blockbench keeps a Painter.current.clear for
 let intercepting = new Set();   // re-entrancy guard, keyed by canvas context
 
 // ---------------------------------------------------------------- settings
@@ -142,8 +147,23 @@ function getMask(texture, active_layer) {
  * The shape and gradient tools rebuild the layer from Painter.current.clear on every
  * pointer move, so the correct "before" state for them is the start of the stroke -
  * not whatever the previous frame left behind.
+ *
+ * Only for those two, and that has to be decided from the tool rather than from whether
+ * Painter.current.clear happens to be there. Blockbench creates that canvas in the
+ * draw_shape_tool / gradient_tool branch of startPaintTool, and stopPaintTool does not
+ * delete it: it deletes nine other Painter.current keys and leaves `clear` behind. So
+ * after one shape or gradient stroke it sits there for the rest of the session.
+ *
+ * Trusting it, with only a size check, sent every later brush stroke down the wrong
+ * path: the whole-layer reconcile instead of the per-dab one, on every mouse move, and
+ * against a "before" from a stroke that ended minutes ago. Brush painting got slower the
+ * longer the session ran, and alpha crept down on a partly transparent layer.
+ *
+ * stroke_uses_clear is set in the startPaintTool wrapper from the same Toolbox.selected
+ * core is about to read, so the two always agree on what kind of stroke this is.
  */
 function getStrokeBaseline(layer) {
+	if (!stroke_uses_clear) return null;
 	let clear = Painter.current && Painter.current.clear;
 	if (!clear || !clear.width) return null;
 	if (clear.width !== layer.canvas.width || clear.height !== layer.canvas.height) return null;
@@ -253,10 +273,10 @@ function runIntercepted(layer, mask, run) {
 	let native_get = proto.getImageData;
 	let native_put = proto.putImageData;
 
-	let baseline = getStrokeBaseline(layer);
-	let allow_decrease = alphaDecreaseAlwaysAllowed();
-	let full_before = baseline || null;
-	let needs_full = !!baseline;
+	let baseline = null;
+	let allow_decrease = false;
+	let full_before = null;
+	let needs_full = false;
 	let hooked = [];
 
 	function snapshotFull() {
@@ -269,32 +289,42 @@ function runIntercepted(layer, mask, run) {
 		}
 	}
 
-	// Brush-like tools mutate through putImageData on a small region - reconcile there
-	// instead of scanning the whole layer on every dab. Tools that redraw from a
-	// stroke baseline are handled by the single full pass below.
-	if (!baseline) {
-		ctx.putImageData = function (imagedata, dx, dy) {
-			try {
-				let region_before = native_get.call(ctx, dx, dy, imagedata.width, imagedata.height).data;
-				reconcile(imagedata.data, region_before, dx, dy, imagedata.width, imagedata.height, layer, mask, allow_decrease);
-			} catch (error) {
-				console.error(LOG, 'region reconcile failed', error);
-			}
-			return native_put.apply(this, arguments);
-		};
-		hooked.push('putImageData');
-	}
-
-	for (let name of MUTATORS) {
-		let native = proto[name];
-		ctx[name] = function () {
-			snapshotFull();
-			return native.apply(this, arguments);
-		};
-		hooked.push(name);
-	}
-
+	// Setting up is inside the try along with the stroke itself, so that a throw while
+	// reading the baseline or installing the hooks still reaches the finally. It used to
+	// sit outside, and a throw there left this context in `intercepting` for good: every
+	// later stroke on the layer took the early exit above and skipped the reconcile, so
+	// Lock Alpha went quietly inert on it until the plugin was reloaded.
 	try {
+		baseline = getStrokeBaseline(layer);
+		allow_decrease = alphaDecreaseAlwaysAllowed();
+		full_before = baseline || null;
+		needs_full = !!baseline;
+
+		// Brush-like tools mutate through putImageData on a small region - reconcile there
+		// instead of scanning the whole layer on every dab. Tools that redraw from a
+		// stroke baseline are handled by the single full pass below.
+		if (!baseline) {
+			ctx.putImageData = function (imagedata, dx, dy) {
+				try {
+					let region_before = native_get.call(ctx, dx, dy, imagedata.width, imagedata.height).data;
+					reconcile(imagedata.data, region_before, dx, dy, imagedata.width, imagedata.height, layer, mask, allow_decrease);
+				} catch (error) {
+					console.error(LOG, 'region reconcile failed', error);
+				}
+				return native_put.apply(this, arguments);
+			};
+			hooked.push('putImageData');
+		}
+
+		for (let name of MUTATORS) {
+			let native = proto[name];
+			ctx[name] = function () {
+				snapshotFull();
+				return native.apply(this, arguments);
+			};
+			hooked.push(name);
+		}
+
 		run();
 	} finally {
 		for (let name of hooked) delete ctx[name];
@@ -324,6 +354,31 @@ function shouldHandle(texture) {
 	return true;
 }
 
+// ---------------------------------------------------------------- toolbar
+
+/**
+ * Put the toggle in the paint toolbar, directly after Lock Alpha.
+ *
+ * Blockbench stores a customised toolbar as a list of bar item ids, and an id it cannot
+ * resolve while building the toolbar is parked in Toolbar#postload until whatever owns it
+ * registers. update(true) drains that list, so a button the user has since moved or removed
+ * keeps their arrangement; the insert below only runs the first time, before anything is
+ * stored. The `true` matters: update() returns early without touching postload while the
+ * toolbar is hidden, which it is whenever the plugin loads outside paint mode.
+ */
+function placeToggleInToolbar(toggle) {
+	let bar = typeof Toolbars != 'undefined' && Toolbars.brush;
+	if (!bar || !Array.isArray(bar.children)) return;
+	try {
+		bar.update(true);
+	} catch (error) {
+		// A stored position could not be restored, so fall through and place it by hand.
+	}
+	if (bar.children.includes(toggle)) return;
+	let lock_alpha_at = bar.children.indexOf(BarItems.lock_alpha);
+	bar.add(toggle, lock_alpha_at === -1 ? undefined : lock_alpha_at + 1);
+}
+
 // ---------------------------------------------------------------- plugin
 
 BBPlugin.register(PLUGIN_ID, {
@@ -341,7 +396,7 @@ BBPlugin.register(PLUGIN_ID, {
 		added_settings.push(new Setting('lla_enabled', {
 			category: 'paint',
 			value: true,
-			name: 'UnLeaky Layers',
+			name: 'Layer-Aware Alpha Lock',
 			description: 'Lock Alpha Channel locks a pixel only when it is fully transparent on every layer, instead of only on the layer being painted.'
 		}));
 		added_settings.push(new Setting('lla_clamp', {
@@ -362,6 +417,29 @@ BBPlugin.register(PLUGIN_ID, {
 			name: 'Count hidden layers',
 			description: 'Also treat hidden layers and layers at 0% opacity as paintable area when deciding what Lock Alpha locks.'
 		}));
+
+		// A button beside Lock Alpha, so the mode can be flipped while painting instead of
+		// through the settings dialog. linked_setting keeps the two in step both ways: a click
+		// writes lla_enabled and saves it, and Blockbench's settings dialog writes back to any
+		// Toggle pointing at the setting it just changed. Name and description have to be given
+		// explicitly - a linked Toggle otherwise looks them up as translation keys, which a
+		// plugin's own setting does not have.
+		try {
+			let ToggleClass = typeof Toggle != 'undefined' ? Toggle : (typeof Blockbench != 'undefined' && Blockbench.Toggle);
+			if (ToggleClass) {
+				toolbar_toggle = new ToggleClass('lla_toggle', {
+					name: 'Layer-Aware Alpha Lock',
+					description: 'Lock Alpha Channel counts a pixel as paintable when any layer is visible there, not just the layer being painted on. Off leaves Lock Alpha behaving like vanilla Blockbench.',
+					icon: 'layers',
+					category: 'paint',
+					condition: () => Modes.paint,
+					linked_setting: 'lla_enabled'
+				});
+				placeToggleInToolbar(toolbar_toggle);
+			}
+		} catch (error) {
+			console.error(LOG, 'could not add the toolbar button', error);
+		}
 
 		originals.edit = Painter.edit;
 		Painter.edit = function (texture, callback, options) {
@@ -393,6 +471,8 @@ BBPlugin.register(PLUGIN_ID, {
 			stroke_masks.clear();
 			baseline_cache = null;
 			stroke_active = true;
+			stroke_uses_clear = !!(typeof Toolbox !== 'undefined' && Toolbox.selected
+				&& CLEAR_TOOLS.includes(Toolbox.selected.id));
 			return originals.startPaintTool.apply(this, arguments);
 		};
 
@@ -402,6 +482,7 @@ BBPlugin.register(PLUGIN_ID, {
 				return originals.stopPaintTool.apply(this, arguments);
 			} finally {
 				stroke_active = false;
+				stroke_uses_clear = false;
 				stroke_masks.clear();
 				baseline_cache = null;
 			}
@@ -419,6 +500,12 @@ BBPlugin.register(PLUGIN_ID, {
 	},
 
 	onunload() {
+		if (toolbar_toggle) {
+			// Takes it out of the toolbar and the keybind list as well.
+			try { toolbar_toggle.delete(); } catch (error) { console.error(LOG, error); }
+			toolbar_toggle = null;
+		}
+
 		if (originals.edit) Painter.edit = originals.edit;
 		if (originals.startPaintTool) Painter.startPaintTool = originals.startPaintTool;
 		if (originals.stopPaintTool) Painter.stopPaintTool = originals.stopPaintTool;
@@ -440,6 +527,7 @@ BBPlugin.register(PLUGIN_ID, {
 		baseline_cache = null;
 		intercepting.clear();
 		stroke_active = false;
+		stroke_uses_clear = false;
 	}
 });
 

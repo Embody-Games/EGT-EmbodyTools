@@ -402,9 +402,110 @@ function resetProject() {
 }
 
 /** Waits out the async Image decodes the plugin (and the mock) rely on. */
+/*
+ * --- what Gradient Map Layer needs ------------------------------------------
+ *
+ * The fourth module is the only one that styles a dialog, hangs entries off the menu bar,
+ * and follows edits through Blockbench's own events rather than by wrapping functions. None
+ * of that existed here, so it sat out of every run with "no Blockbench.addCSS" and the
+ * suites were green without ever loading it.
+ *
+ * Everything below is shaped to be checkable: a stylesheet that records whether it was
+ * deleted, menus that keep their structure array, and a listener registry the suites can
+ * read. Unloading cleanly is the whole reason the bundle can hold four tools, so the mock
+ * has to be able to tell when it has not.
+ */
+
+/** Menus keep their entries in `structure`, and nothing removes them for you. */
+function makeMenu(name) {
+	return {
+		name,
+		structure: [],
+		addAction(action) { this.structure.push(action); },
+	};
+}
+
+TextureLayer.prototype.menu = makeMenu('texture_layer');
+
+g.MenuBar = {
+	menus: { tools: makeMenu('tools'), filter: makeMenu('filter') },
+	addAction(action, path) {
+		const menu = g.MenuBar.menus[path];
+		if (!menu) throw new Error('no such menu: ' + path);
+		menu.addAction(action);
+	},
+};
+
+g.Modes = { paint: true, edit: false, id: 'paint' };
+
+// Every stylesheet handed out, so a suite can ask whether the plugin took its own back.
+g.Blockbench.css_handles = [];
+g.Blockbench.addCSS = function (css) {
+	const handle = { css, deleted: false, delete() { this.deleted = true; } };
+	g.Blockbench.css_handles.push(handle);
+	return handle;
+};
+
+// GML removes its hooks by (name, function) rather than through the handle Blockbench.on
+// returns. Both have to work, and both have to actually drop the listener.
+g.Blockbench.removeListener = function (name, callback) {
+	const list = event_listeners[name];
+	if (!list) return;
+	const index = list.indexOf(callback);
+	if (index !== -1) list.splice(index, 1);
+};
+
+/** How many listeners are on an event right now. For "did it unhook" assertions. */
+g.Blockbench.listenerCount = function (name) {
+	return (event_listeners[name] || []).length;
+};
+
+/*
+ * Undo, enough of it to be honest about ordering. GML wraps its writes in
+ * initEdit/finishEdit and calls amendEdit while a stroke is being replaced, and a module
+ * that pushes an entry without closing it is a real bug, so the stand-in counts both ends
+ * rather than pretending to be a working undo stack.
+ */
+g.Undo = {
+	history: [],
+	open: null,
+	amended: 0,
+	initEdit(aspects) {
+		g.Undo.open = { aspects, amended: false };
+		return g.Undo.open;
+	},
+	finishEdit(name) {
+		g.Undo.history.push({ name, aspects: g.Undo.open && g.Undo.open.aspects });
+		g.Undo.open = null;
+	},
+	cancelEdit() { g.Undo.open = null; },
+	amendEdit(form, callback) {
+		g.Undo.amended++;
+		if (typeof callback === 'function') callback({}, form);
+	},
+	undo() {},
+	redo() {},
+};
+
+/*
+ * localStorage, because GML keeps its gradient library, its groups, its options and its
+ * per-layer memory there rather than in Blockbench settings. Which also means the bundle
+ * does not clear it on unload, deliberately, so a standalone copy keeps your gradients -
+ * and a suite can check that it did not.
+ */
+const storage = new Map();
+g.localStorage = {
+	getItem: (key) => (storage.has(key) ? storage.get(key) : null),
+	setItem: (key, value) => { storage.set(key, String(value)); },
+	removeItem: (key) => { storage.delete(key); },
+	clear: () => storage.clear(),
+	get length() { return storage.size; },
+	key: (i) => Array.from(storage.keys())[i] ?? null,
+};
+
 function settle(ms = 60) {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 module.exports = { loadPlugin, resetProject, settle, TextureLayer, TextureLayerGroup,
-	enableLayerGroups, disableLayerGroups, Texture, Codec, fs, PathModule };
+	enableLayerGroups, disableLayerGroups, Texture, Codec, fs, PathModule, makeMenu };

@@ -80,6 +80,10 @@ const MODULES = [
 		close: '19_layers_close.js',
 		tag: { decl: 'TAG', from: '[delta-layers]', to: '[embodytools/layers]', expect_tags: 1 },
 		leading_comment: false,
+		// Deliberate, and the only one of these. writeSidecar stamps every sidecar with
+		// what wrote it, and in the bundle that should say embodytools, not delta_layers.
+		// The reference resolving outward to the bundle's own constants is how it does it.
+		outer_ok: ['PLUGIN_ID', 'PLUGIN_VERSION'],
 	},
 	{
 		key: 'stretch',
@@ -99,7 +103,30 @@ const MODULES = [
 		tag: { decl: 'LOG', from: '[UnLeaky Layers]', to: '[embodytools/unleaky]', expect_tags: 1 },
 		leading_comment: false,
 	},
+	{
+		key: 'gradient',
+		src: 'gradient_map_layer.js',
+		plugin: 'gradient_map_layer',
+		open: '40_gradient_open.js',
+		close: '49_gradient_close.js',
+		// No TAG constant in this one: it writes the prefix out at each console call.
+		tag: { decl: null, from: '[Gradient Map Layer]', to: '[embodytools/gradient]', expect_tags: 17 },
+		leading_comment: false,
+	},
 ];
+
+/*
+ * Names the registration block declares at the top level of the file. A module body that
+ * mentions one without declaring it is not using its own variable: the reference walks out
+ * of the closure and lands on the bundle's. That is not hypothetical - v1.3.0 shipped a
+ * stretch module logging through `TAG`, which resolved to the bundle's '[embodytools]' two
+ * closures out, and nothing noticed.
+ *
+ * Checked against the spliced source body only. The frame files are bundle code and use
+ * PLUGIN_ID on purpose.
+ */
+const OUTER_NAMES = ['PLUGIN_ID', 'PLUGIN_VERSION', 'ICON', 'TAG', 'MODULES', 'REPLACES',
+	'loaded_modules', 'say', 'grumble', 'checkForLegacyPlugins'];
 
 /*
  * Things every standalone plugin has that the bundle provides once, up top, for all
@@ -120,6 +147,41 @@ const SHARED = [
 ];
 
 const fail = (message) => { throw new Error(message); };
+
+/**
+ * Code with the comments and string bodies taken out, for the outer-name check below.
+ * Without this the check trips over prose: "only the user can say which one is right" is
+ * not a reference to the registration block's say().
+ *
+ * A single pass tracking what it is inside. Regex division (`/x/`) is left alone, which
+ * is fine here - the worst it can do is leave a comment in, and a stray comment can only
+ * make the check complain about something harmless, which is loud rather than silent.
+ */
+function stripCommentsAndStrings(source) {
+	let out = '';
+	let state = 'code';
+	let quote = '';
+	for (let i = 0; i < source.length; i++) {
+		const c = source[i];
+		const next = source[i + 1];
+		if (state === 'code') {
+			if (c === '/' && next === '/') { state = 'line'; i++; continue; }
+			if (c === '/' && next === '*') { state = 'block'; i++; continue; }
+			if (c === '\'' || c === '"' || c === '`') { state = 'string'; quote = c; out += c; continue; }
+			out += c;
+		} else if (state === 'line') {
+			if (c === '\n') { state = 'code'; out += c; }
+		} else if (state === 'block') {
+			if (c === '*' && next === '/') { state = 'code'; i++; }
+			else if (c === '\n') out += c;
+		} else if (state === 'string') {
+			if (c === '\\') { i++; continue; }
+			if (c === quote) { state = 'code'; out += c; }
+			else if (c === '\n') out += c;
+		}
+	}
+	return out;
+}
 
 /** Every index whose line matches; the callers all want exactly one. */
 function findAll(lines, re) {
@@ -225,6 +287,22 @@ function extract(module) {
 		fail(`${where}: a shared declaration survived extraction`);
 	}
 	if (lines.some((line) => line.includes(from))) fail(`${where}: an old console tag survived retagging`);
+
+	// Nothing in here may lean on a name the registration block owns, unless the module
+	// entry above says it means to.
+	const body = stripCommentsAndStrings(lines.join('\n'));
+	const allowed = module.outer_ok || [];
+	for (const name of OUTER_NAMES) {
+		if (allowed.includes(name)) continue;
+		const used = new RegExp(`(?<![A-Za-z0-9_$.'\"])${name}(?![A-Za-z0-9_$])`).test(body);
+		if (!used) continue;
+		const declared = new RegExp(`^\\s*(?:const|let|var|function|class)\\s+${name}\\b`, 'm').test(body);
+		if (!declared) {
+			fail(`${where}: uses ${name} without declaring it. Inside the bundle that resolves to the `
+				+ 'registration block\'s own variable, two closures out. Give the module its own, or '
+				+ 'write the value out at the point of use.');
+		}
+	}
 
 	return { version, body: trimBlank(lines) };
 }

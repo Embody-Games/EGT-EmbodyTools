@@ -8,15 +8,37 @@
  * it.
  */
 
-const MODULES = [DeltaLayersModule, AnchoredStretchModule, UnLeakyLayersModule];
+const MODULES = [DeltaLayersModule, AnchoredStretchModule, UnLeakyLayersModule, GradientMapLayerModule];
 
-// The standalone plugin each module is, for the "you still have that one installed"
-// warning below. Only the current names: the ones these went by before are not something
-// this has to keep working with.
+/*
+ * The standalone plugins each module replaces, for the "you still have that one
+ * installed" warning below.
+ *
+ * Every name a tool has gone by, not just the current one. Trimming this to current names
+ * only was a mistake: the whole job of the warning is spotting an older copy still sitting
+ * in the plugins folder, and an older copy is exactly the one with an older id. A machine
+ * here had embodygames_texture_layer_bridge.js and one_sided_stretch.js enabled next to
+ * the bundle and was told nothing.
+ *
+ * Two layer plugins independently restoring the same texture, and both writing sidecars on
+ * save, is the worst of these to have running unnoticed.
+ */
 const REPLACES = {
-	delta_layers: [{ id: 'delta_layers', name: 'Delta Layers' }],
-	anchored_stretch: [{ id: 'anchored_stretch', name: 'Anchored Stretch' }],
-	unleakylayers: [{ id: 'unleakylayers', name: 'UnLeaky Layers' }],
+	delta_layers: [
+		{ id: 'delta_layers', name: 'Delta Layers' },
+		{ id: 'embodygames_texture_layer_bridge', name: 'Texture Layers' },
+	],
+	anchored_stretch: [
+		{ id: 'anchored_stretch', name: 'Anchored Stretch' },
+		{ id: 'one_sided_stretch', name: 'One-Sided Stretch' },
+	],
+	unleakylayers: [
+		{ id: 'unleakylayers', name: 'UnLeaky Layers' },
+		{ id: 'layered_lock_alpha', name: 'Layered Lock Alpha' },
+	],
+	gradient_map_layer: [
+		{ id: 'gradient_map_layer', name: 'Gradient Map Layer' },
+	],
 };
 
 const TAG = '[embodytools]';
@@ -53,8 +75,9 @@ function checkForLegacyPlugins() {
 		// Named outright by Blockbench's plugin list, whichever of us loaded first.
 		const found = previous.filter((plugin) => installed.has(plugin.id));
 		// Or, if the list was no help: one of our own setting ids already exists, which
-		// can only be the plugin those ids came from.
-		if (!found.length && typeof settings !== 'undefined'
+		// can only be the plugin those ids came from. Gradient Map Layer has no settings,
+		// so for that one the plugin list is the only signal there is.
+		if (!found.length && typeof settings !== 'undefined' && module.settings.length
 			&& module.settings.some((id) => !!settings[id])) {
 			found.push(previous[0]);
 		}
@@ -89,7 +112,7 @@ BBPlugin.register(PLUGIN_ID, {
 		+ 'formats that cannot store them, anchors the face you are not dragging when stretching, '
 		+ 'and makes Lock Alpha Channel respect every layer.',
 	about: [
-		'Three tools that used to be three plugins. Each one can be turned off on its own, and each keeps its settings where you would look for it.',
+		'Four tools that used to be four plugins. Each one can be turned off on its own, and each keeps its settings where you would look for it.',
 		'',
 		'## Delta Layers (Settings > Export)',
 		'',
@@ -119,6 +142,16 @@ BBPlugin.register(PLUGIN_ID, {
 		'Lock Alpha Channel only looks at the layer you are painting on, so on a fresh layer above your artwork everything is locked and the brush does nothing. This makes it consider the combined alpha of every layer: a pixel is locked only when it is transparent on all of them, and strokes are clipped to the combined silhouette.',
 		'',
 		'- The eraser works on an upper layer again. Lowering alpha is blocked only where that layer is the only thing holding the pixel up, so erasing above your artwork reveals what is underneath instead of punching a hole in the silhouette.',
+		'- Written by quinten.bench.',
+		'',
+		'## Gradient Map Layer (Tools menu)',
+		'',
+		'Colourises a value or luminance map through a saved 256x16 gradient ramp, as a new layer that keeps following the layer it was made from. The greyscale stays the thing you paint; the colour is a view of it, the way an adjustment layer works.',
+		'',
+		'- The generated layer re-renders as you paint on its source, and the result is previewed on the model while the dialog is open. Cancelling puts the texture back.',
+		'- Gradients live in a library you build up, importable and exportable as PNG or Photoshop `.grd`, grouped however you like.',
+		'- The only one of the four with no Blockbench settings: its library, groups and options are in `localStorage`, so a standalone copy of the plugin shares the same gradients.',
+		'- Reachable from the Tools menu, the Filter menu, a texture\'s right-click menu and a layer\'s right-click menu.',
 		'- Written by quinten.bench.',
 		'',
 		'---',

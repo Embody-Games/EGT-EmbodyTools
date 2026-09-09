@@ -15,7 +15,7 @@ hand edit to `embodytools.js` cannot reach `main`.
 | Path | What it is |
 |---|---|
 | `assemble.mjs` | The build. Reads the comments at the top of it before changing anything. |
-| `src/*.js` | The three standalone plugins, verbatim, each at a tagged release. |
+| `src/*.js` | The four standalone plugins, verbatim, each at a tagged release. Gradient Map Layer has no repo yet, so its copy is the source of truth for it. |
 | `frame/*.js` | The bundle-only parts: the header, the module banners, each module's interface, and the single registration call. |
 
 ## The idea

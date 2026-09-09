@@ -1,6 +1,6 @@
 # EmbodyTools
 
-Embody Games' Blockbench toolset: three tools in one plugin.
+Embody Games' Blockbench toolset: four tools in one plugin.
 
 | Tool | What it does | Where its settings live |
 | --- | --- | --- |
@@ -8,7 +8,7 @@ Embody Games' Blockbench toolset: three tools in one plugin.
 | **Anchored Stretch** | Makes the Stretch tool move only the face you drag, stops resizing a stretched cube from creeping outward on the anchored side, and adds a Stretch mode to Vertex Snap. | Settings > Edit |
 | **UnLeaky Layers** | Makes Lock Alpha Channel look at every layer, so you can paint on an empty layer above your artwork. | Settings > Paint |
 
-These were three separate plugins until v1.0.0. Same behaviour, same settings, one file to hand out.
+These were separate plugins. Same behaviour, same settings, one file to hand out.
 
 ## Install
 
@@ -65,7 +65,7 @@ The eraser works on an upper layer again too. Lowering alpha is blocked only whe
 
 ## Working on it
 
-`embodytools.js` is **generated**, by `build/assemble.mjs` out of the three standalone plugins in `build/src` and the frame files in `build/frame` — see [build/README.md](build/README.md). Do not edit it: `npm run build:check` runs in CI and fails if the shipped file is not what the build produces. Run `npm run build` after changing a source or the frame.
+`embodytools.js` is **generated**, by `build/assemble.mjs` out of the four standalone plugins in `build/src` and the frame files in `build/frame` — see [build/README.md](build/README.md). Do not edit it: `npm run build:check` runs in CI and fails if the shipped file is not what the build produces. Run `npm run build` after changing a source or the frame.
 
 What it produces is still one plain file with no imports, because that is what Blockbench loads. It is laid out as a short shared prelude, then one section per tool behind a banner like
 
@@ -73,7 +73,7 @@ What it produces is still one plain file with no imports, because that is what B
 // ===== 2/3  ANCHORED STRETCH =====
 ```
 
-Each section is its own closure and shares nothing with the others but the prelude, which is why all three can keep the variable names they had as separate plugins. Registration is at the bottom: one `BBPlugin.register` that walks a `MODULES` list, where every module reports whether it can run here (`blocked()`) and sets itself up and tears itself down (`load()` / `unload()`). A module that cannot run, or that fails on the way up, is skipped with a line in the console and does not take the others with it.
+Each section is its own closure and shares nothing with the others but the prelude, which is why all four can keep the variable names they had as separate plugins. Registration is at the bottom: one `BBPlugin.register` that walks a `MODULES` list, where every module reports whether it can run here (`blocked()`) and sets itself up and tears itself down (`load()` / `unload()`). A module that cannot run, or that fails on the way up, is skipped with a line in the console and does not take the others with it.
 
 To add a tool: add a section, return the same fields, put it in `MODULES`.
 
@@ -83,7 +83,7 @@ PNG, run `npm run icon`, and the checks will tell you if you forget.
 
 ```sh
 npm install        # canvas, which the suites need for real PNG encode and decode
-npm test           # static checks, then all three suites
+npm test           # static checks, then all four suites
 npm run check      # static checks only, no suites
 npm run writes     # how many files one Ctrl+S actually touches
 npm run icon       # re-embed embody_tools_icon.png after changing it

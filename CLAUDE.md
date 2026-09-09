@@ -1,6 +1,6 @@
 # EmbodyTools — notes for Claude
 
-Blockbench plugin bundling three tools in one file: texture layer persistence,
+Blockbench plugin bundling four tools in one file: texture layer persistence,
 Anchored Stretch, and layer-aware Lock Alpha. `README.md` explains what it does.
 `RELEASING.md` is the authority on cutting a release, including how to push from a
 Cowork session. Read that before releasing anything; this file is orientation.
@@ -13,7 +13,7 @@ this bundle is the only home for a change.
 ## Shape of the repo
 
 **`embodytools.js` is generated. Never edit it.** `build/assemble.mjs` splices the
-three standalone plugins in `build/src` into the frame files in `build/frame`, and
+four standalone plugins in `build/src` into the frame files in `build/frame`, and
 `npm run build:check` — part of `npm run check`, `npm test`, CI and every release —
 fails if the shipped file is not exactly what the build produces. `build/README.md` is
 the authority on it; read that before touching a module.
@@ -22,7 +22,7 @@ the authority on it; read that before touching a module.
 |---|---|
 | `embodytools.js` | **Generated.** The whole plugin, one file, because that is what Blockbench loads. |
 | `build/assemble.mjs` | The build. `npm run build`, `npm run build:check`. |
-| `build/src/*.js` | The three plugins, verbatim, each at a tagged release. Where a module's code actually lives. |
+| `build/src/*.js` | The four plugins, verbatim, each at a tagged release. Where a module's code actually lives. Gradient Map Layer has no repo of its own yet, so its copy here is the source of truth. |
 | `build/frame/*.js` | Bundle-only: header, banners, each module's interface, the one `BBPlugin.register`. Hand-written. |
 | `package.json` | `version` is **the only place the version lives**. The build reads it. |
 | `changelog.json` | Blockbench's changelog format. **The only place release notes are written.** |
@@ -39,7 +39,7 @@ something the bundle can start and stop on its own, so when a plugin's
 `onload`/`onunload` changes, that file needs the same change by hand.
 
 `check.mjs` and `verify.mjs` are **not** duplicates. `check.mjs` is static checks
-over the plugin file; `verify.mjs` runs those and then the three suites. `npm test`
+over the plugin file; `verify.mjs` runs those and then the four suites. `npm test`
 runs `verify.mjs`; `npm run check` runs it with `--quick` for static checks only.
 This split is the best checking setup of the four repos and the others should grow
 toward it, not away from it.
@@ -63,7 +63,7 @@ byte-identical is.
 
 `.github/workflows/release.yml`, on a GitHub runner:
 
-1. Reruns `npm test`, so static checks plus all three suites.
+1. Reruns `npm test`, so static checks plus all four suites.
 2. Refuses if the tag disagrees with `PLUGIN_VERSION`.
 3. Publishes the GitHub release. Body is that version's `changelog.json` entry,
    with `embodytools.js` and `changelog.json` attached.

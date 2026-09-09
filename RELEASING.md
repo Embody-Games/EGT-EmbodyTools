@@ -45,7 +45,7 @@ the GitHub release page all render from it, so it is never written twice.
 
 - Say what the user sees, not what the code did. "A texture holding a layer group stopped
   saving its layers entirely" beats "fixed TypeError in writeSidecar".
-- Name the tool when a line is about one of them, since a reader of this plugin has three.
+- Name the tool when a line is about one of them, since a reader of this plugin has four.
 - One sentence per line where it fits, plain words, no em-dashes. Match the voice of the
   existing entries, which explain consequences rather than internals.
 - Categories, in this order: Added, Changed, Fixed, Removed, Safeguards.

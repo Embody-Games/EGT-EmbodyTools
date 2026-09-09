@@ -14,9 +14,11 @@ import { dirname, join } from 'node:path';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const quick = process.argv.includes('--quick');
 
-// run_tests_modules.js needs the paint and transform stand-ins, the other two do not.
+// run_tests_modules.js brings the paint and transform stand-ins, run_tests_gradient.js the
+// menus, stylesheet and events the fourth module needs. The two layer suites deliberately
+// have none of that, which is what proves those modules sit out cleanly.
 // Order is cheapest first, so a broken file fails in a second rather than a minute.
-const SUITES = ['run_tests.js', 'run_tests_52.js', 'run_tests_modules.js'];
+const SUITES = ['run_tests.js', 'run_tests_52.js', 'run_tests_modules.js', 'run_tests_gradient.js'];
 
 function run(label, file, args = []) {
 	console.log(`\n--- ${label} ---`);
