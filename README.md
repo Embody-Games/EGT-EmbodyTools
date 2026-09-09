@@ -65,7 +65,9 @@ The eraser works on an upper layer again too. Lowering alpha is blocked only whe
 
 ## Working on it
 
-`embodytools.js` is one file with no build step: what is in the repo is what Blockbench loads. It is laid out as a short shared prelude, then one section per tool behind a banner like
+`embodytools.js` is **generated**, by `build/assemble.mjs` out of the three standalone plugins in `build/src` and the frame files in `build/frame` — see [build/README.md](build/README.md). Do not edit it: `npm run build:check` runs in CI and fails if the shipped file is not what the build produces. Run `npm run build` after changing a source or the frame.
+
+What it produces is still one plain file with no imports, because that is what Blockbench loads. It is laid out as a short shared prelude, then one section per tool behind a banner like
 
 ```js
 // ===== 2/3  ANCHORED STRETCH =====

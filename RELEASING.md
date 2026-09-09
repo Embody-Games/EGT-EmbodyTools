@@ -1,7 +1,8 @@
 # Releasing EmbodyTools
 
-There is no build step. Cutting a version means running one command, and the tag is what
-publishes the release.
+Cutting a version means running one command, and the tag is what publishes the release.
+`embodytools.js` is generated (see [build/README.md](build/README.md)); the release rebuilds
+it for you.
 
 ```sh
 npm install                     # canvas is a devDependency and the suites need it
@@ -9,8 +10,8 @@ npm run release -- <major|minor|patch> --title "Short release name" \
   --added "..." --changed "..." --fixed "..."
 ```
 
-`scripts/release.mjs` runs the checks and every test suite, bumps `const PLUGIN_VERSION` in
-`embodytools.js` (the only place the version lives) and `package.json`, inserts the
+`scripts/release.mjs` runs the checks and every test suite, bumps the version in
+`package.json` (the only place it lives) and rebuilds `embodytools.js` from it, inserts the
 `changelog.json` entry, regenerates `CHANGELOG.md`, commits `vX.Y.Z: <title>`, tags `vX.Y.Z`
 and pushes. The gate runs before anything is written, so a failing suite leaves the tree
 untouched, and again after, so a bad edit cannot be committed.

@@ -12,16 +12,31 @@ this bundle is the only home for a change.
 
 ## Shape of the repo
 
-There is **no build step**. The plugin is one hand-written file that ships as-is.
+**`embodytools.js` is generated. Never edit it.** `build/assemble.mjs` splices the
+three standalone plugins in `build/src` into the frame files in `build/frame`, and
+`npm run build:check` — part of `npm run check`, `npm test`, CI and every release —
+fails if the shipped file is not exactly what the build produces. `build/README.md` is
+the authority on it; read that before touching a module.
 
 | Path | What it is |
 |---|---|
-| `embodytools.js` | The entire plugin. `const PLUGIN_VERSION` near the top is the only place the version lives. |
+| `embodytools.js` | **Generated.** The whole plugin, one file, because that is what Blockbench loads. |
+| `build/assemble.mjs` | The build. `npm run build`, `npm run build:check`. |
+| `build/src/*.js` | The three plugins, verbatim, each at a tagged release. Where a module's code actually lives. |
+| `build/frame/*.js` | Bundle-only: header, banners, each module's interface, the one `BBPlugin.register`. Hand-written. |
+| `package.json` | `version` is **the only place the version lives**. The build reads it. |
 | `changelog.json` | Blockbench's changelog format. **The only place release notes are written.** |
 | `CHANGELOG.md` | Generated. Never hand-edit it; run `npm run changelog`. |
-| `embody_tools_icon.png` | Source for the inlined icon. Re-inline with `npm run icon`. |
+| `embody_tools_icon.png` | Source for the inlined icon. The build embeds it; `npm run icon` just builds. |
 | `test/` | CommonJS suites: `run_tests.js`, `run_tests_52.js`, `run_tests_modules.js`. |
 | `scripts/` | `release.mjs`, `changelog.mjs`, `check.mjs`, `verify.mjs`, `icon.mjs`, `discord_notify.mjs`. |
+
+Updating a tool is: copy the released file into `build/src`, fix its
+`Was: <plugin> <version>` line in `build/frame/00_head.js`, `npm run build`, read the
+diff. The one thing the build cannot check is the module interface in
+`build/frame/*_close.js`: it is that plugin's `Plugin.register` block reshaped into
+something the bundle can start and stop on its own, so when a plugin's
+`onload`/`onunload` changes, that file needs the same change by hand.
 
 `check.mjs` and `verify.mjs` are **not** duplicates. `check.mjs` is static checks
 over the plugin file; `verify.mjs` runs those and then the three suites. `npm test`
@@ -40,6 +55,9 @@ changelog entry, commits, tags and pushes. Everything after that is automatic.
 
 Repo-only changes — CI, README, scripts, this file — get a plain commit. No version
 bump, no tag, no changelog entry. The version belongs to the plugin, not the repo.
+A change under `build/src` or `build/frame` is **not** repo-only: it changes what
+ships, so it is a release. A change to `assemble.mjs` that leaves the output
+byte-identical is.
 
 ## What happens once the tag lands
 
@@ -88,6 +106,11 @@ The step is `continue-on-error`. A Discord outage must never fail a good release
 
 ## Traps
 
+- **`embodytools.js` is generated.** An edit to it is lost at the next `npm run build`
+  and fails CI before that. This is not hypothetical: v1.3.0 shipped a hand merge in
+  which the stretch module logged through `TAG`, which resolved to the registration
+  block's `'[embodytools]'` two closures up rather than the module's own tag. The
+  build check exists because of that.
 - **The test suites are CommonJS.** Do not add `"type": "module"` to
   `package.json`; it breaks all of them. The `.mjs` extensions already make the
   scripts ESM, so it buys nothing.

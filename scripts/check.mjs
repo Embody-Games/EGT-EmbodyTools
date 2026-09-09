@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
- * The gate that runs before every release. There is no build step for this
- * plugin, so these checks are what stands between a bad edit and a tag.
+ * The gate that runs before every release: static checks over embodytools.js,
+ * starting with the one that matters most, which is that the file is what
+ * build/assemble.mjs produces out of build/src and build/frame.
  *
  *   node scripts/check.mjs
  */
@@ -33,6 +34,13 @@ console.log('checks:');
 
 check('plugin parses', () => {
 	execFileSync(process.execPath, ['--check', PLUGIN], { stdio: 'pipe' });
+});
+
+check('embodytools.js is what the build produces', () => {
+	// First, because every check below reads embodytools.js: if that file is not the
+	// build's output then they are all checking bytes nobody meant to ship. The hand
+	// merge this replaced drifted exactly that way.
+	execFileSync(process.execPath, [join(root, 'build/assemble.mjs'), '--check'], { stdio: 'pipe' });
 });
 
 check('plugin declares exactly one PLUGIN_VERSION', () => {
@@ -130,8 +138,9 @@ check('each module is still there, by the settings it owns', () => {
 });
 
 check('the embedded icon is the repo\'s own art', () => {
-	// One file with no build step means the icon has to be copied in by hand, so the
-	// one thing worth checking is that somebody remembered to.
+	// The build embeds it, so this can only fail if the shipped file went stale
+	// against the PNG - which the build check above would already have caught. Kept
+	// because it names the actual problem instead of showing a diff of base64.
 	execFileSync(process.execPath, [join(root, 'scripts/icon.mjs'), '--check'], { stdio: 'pipe' });
 });
 

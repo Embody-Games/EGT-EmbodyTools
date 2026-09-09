@@ -137,14 +137,19 @@ if (dryRun) {
 
 // ------------------------------------------------------------------ write
 
-writeFileSync(PLUGIN, source.replace(
-	/^const PLUGIN_VERSION = '[^']+';/m,
-	`const PLUGIN_VERSION = '${version}';`), 'utf8');
-
+// package.json first: it is where the version lives, and the build reads it from
+// there. embodytools.js is generated, so it is never edited here - it is rebuilt.
+// The version used to be written into both by hand, and the two went out of step.
 const pkgPath = join(root, 'package.json');
 const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
 pkg.version = version;
 writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf8');
+
+try {
+	execFileSync(process.execPath, [join(root, 'build/assemble.mjs')], { cwd: root, stdio: 'inherit' });
+} catch {
+	die('the build failed, so nothing was tagged. The tree is bumped but uncommitted.');
+}
 
 // npm writes the version into the lockfile in two places. Without this the lockfile
 // drifts behind package.json, which it had done since 1.0.0.

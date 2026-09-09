@@ -8,3 +8,7 @@ node_modules/
 .env
 RELEASE_NOTES.md
 release-notes.md
+
+# Where a Cowork session drops plans and notes on this repo. Not part of the plugin,
+# and release.mjs refuses to run with anything untracked lying around.
+Claude outputs/
