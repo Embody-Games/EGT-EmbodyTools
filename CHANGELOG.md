@@ -2,6 +2,28 @@
 
 Generated from `changelog.json` by `scripts/changelog.mjs`. Edit that file, not this one.
 
+## v1.4.0 - Gradient Map Layer joins the set
+
+_2026-09-09_
+
+### Added
+
+- Gradient Map Layer, by quinten.bench: colourise a value or luminance map through a saved 256x16 gradient ramp, as a layer that keeps following the one it was made from. Paint the greyscale, watch the colour follow. In the Tools menu, the Filter menu, and a texture's and a layer's right-click menus. It is the only one of the four with no Blockbench settings: its gradient library, groups and options live in localStorage, so a standalone copy of the plugin shares the same gradients.
+
+### Changed
+
+- Delta Layers comes in at its 1.6.0 behaviour and UnLeaky Layers at its 1.3.2, so both of this week's fixes are in: a save no longer writes over a layer stack it did not restore, layer images edited in another program are no longer overwritten without asking, and one use of the Shape or Gradient tool no longer slows every brush stroke after it.
+- UnLeaky Layers brings its Layer-Aware Alpha Lock button, so the mode can be flipped from the paint toolbar instead of through Settings.
+
+### Fixed
+
+- Gradient Map Layer left its five menu entries behind when the plugin was disabled or reloaded, which put a second copy of each in the menus on the way back and left dead entries after a disable.
+
+### Safeguards
+
+- The warning about an older copy still being installed knows every name these tools have gone by again, not just the current ones. If embodygames_texture_layer_bridge.js, one_sided_stretch.js or layered_lock_alpha.js is still in your plugins folder, EmbodyTools now says so.
+- A new test suite drives all four together: loading, unloading, reloading, and each one sitting out or failing on the way up without taking the others with it. The build also refuses a tool that reaches out of its own section for one of the shared names, which is the mistake that shipped in 1.3.0.
+
 ## v1.3.1 - Console tag
 
 _2026-09-09_

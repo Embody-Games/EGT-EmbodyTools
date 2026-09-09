@@ -67,7 +67,7 @@
 
 // Must match the filename: embodytools.js
 const PLUGIN_ID = 'embodytools';
-const PLUGIN_VERSION = '1.3.1';
+const PLUGIN_VERSION = '1.4.0';
 
 // The plugin icon, embedded so this stays a single file wherever it is loaded from;
 // Blockbench's getIconNode takes any data:image/ URL. The art is embody_tools_icon.png
