@@ -2,6 +2,18 @@
 
 Generated from `changelog.json` by `scripts/changelog.mjs`. Edit that file, not this one.
 
+## v1.3.1 - Console tag
+
+_2026-09-09_
+
+### Fixed
+
+- One console line from the Anchored Stretch tool was labelled as EmbodyTools rather than as the stretch tool. Nothing else about it changes.
+
+### Safeguards
+
+- embodytools.js is now generated rather than merged by hand, and the checks fail if the file that ships is not what the build produces. That is what caught the line above.
+
 ## v1.3.0 - Resize + Stretch tool
 
 _2026-09-08_
