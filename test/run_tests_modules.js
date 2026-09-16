@@ -72,6 +72,13 @@ const core_start_paint = globalThis.Painter.startPaintTool;
 const core_stop_paint = globalThis.Painter.stopPaintTool;
 
 globalThis.Toolbox = { selected: { id: 'brush_tool' } };
+/*
+ * The gizmo. Only `axis` matters here: core assigns it the name of the handle you
+ * grabbed ('X', 'NX', ...) on pointer down, for every tool. `direction` is the field
+ * core maintains only for its own resize and stretch tools, which is why a plugin
+ * tool has to read the handle name instead of trusting it.
+ */
+globalThis.Transformer = { axis: 'X' };
 globalThis.BarItems.lock_alpha = { description: 'Only paint on pixels that are not transparent.' };
 globalThis.BarItems.blend_mode = { value: 'default' };
 const CORE_LOCK_ALPHA_TOOLTIP = globalThis.BarItems.lock_alpha.description;
@@ -396,20 +403,28 @@ check('both together stop snapping altogether',
 	toolOffset(2.3, { shiftKey: true, ctrlKey: true }));
 
 /**
- * One drag with the tool selected. `value` is what calculateOffset worked out, so
- * it is negative on a negative handle, the same way core feeds resize().
+ * One drag with the tool selected. `handle` is the gizmo handle grabbed, the way core
+ * puts it in Transformer.axis. `value` is what calculateOffset worked out, so it runs
+ * negative down the axis, the same way core feeds resize().
+ *
+ * context.direction is passed deliberately wrong. Core only keeps it up to date for
+ * resize_tool and stretch_tool, so for any other tool it arrives holding whatever the
+ * last drag with one of those left behind. Feeding it the opposite of the truth is
+ * what makes these cases prove the tool reads the handle instead.
  */
-function toolDrag(target, value, direction) {
+function toolDrag(target, handle, value) {
+	globalThis.Transformer.axis = handle;
+	let stale_direction = handle.charAt(0) === 'N' ? 1 : -1;
 	globalThis.Outliner.selected = [target];
 	undo_edits = undo_finishes = 0;
 	edit_module.onStart({ event: {} });
-	edit_module.onMove({ event: {}, point: { x: value, y: 0, z: 0 }, axis: 'x', axis_number: 0, direction, value });
+	edit_module.onMove({ event: {}, point: { x: value, y: 0, z: 0 }, axis: 'x', axis_number: 0, direction: stale_direction, value });
 	edit_module.onEnd({ event: {}, has_changed: true, keep_changes: true });
 	globalThis.Outliner.selected = [];
 }
 
 cube = new Cube([0, 0, 0], [8, 8, 8]);
-toolDrag(cube, 2.25, 1);
+toolDrag(cube, 'X', 2.25);
 check('the whole part of the gap went into size', cube.size(0) === 10, cube.size(0));
 check('and stretch was left holding only the fraction', near(cube.stretch[0], 1.025), cube.stretch[0]);
 check('the dragged face moved by the whole amount asked for',
@@ -421,18 +436,33 @@ check('the drag was one undo entry, named for the tool',
 	[undo_edits, undo_finishes, undo_last_name]);
 
 cube = new Cube([0, 0, 0], [8, 8, 8]);
-toolDrag(cube, -2.25, -1);
-check('the negative handle holds the other face instead',
-	near(renderedFace(cube, 0, true), 8) && near(renderedFace(cube, 0, false), -2.25),
-	[renderedFace(cube, 0, false), renderedFace(cube, 0, true)]);
+toolDrag(cube, 'NX', -2.25);
+check('the negative handle grows the cube too', cube.size(0) === 10, cube.size(0));
+check('it holds the far face, not the one being dragged',
+	near(renderedFace(cube, 0, true), 8), renderedFace(cube, 0, true));
+check('so the face under the cursor is the one that moves',
+	near(renderedFace(cube, 0, false), -2.25), renderedFace(cube, 0, false));
+
+// Without a gizmo to read, fall back to what core passed in rather than guessing.
+delete globalThis.Transformer.axis;
+cube = new Cube([0, 0, 0], [8, 8, 8]);
+globalThis.Outliner.selected = [cube];
+edit_module.onStart({ event: {} });
+edit_module.onMove({ event: {}, point: { x: -2.25, y: 0, z: 0 }, axis: 'x', axis_number: 0, direction: -1, value: -2.25 });
+edit_module.onEnd({ event: {}, has_changed: true, keep_changes: true });
+globalThis.Outliner.selected = [];
+check('with no handle name to read it falls back to core\'s direction',
+	cube.size(0) === 10 && near(renderedFace(cube, 0, true), 8),
+	[cube.size(0), renderedFace(cube, 0, true)]);
+globalThis.Transformer.axis = 'X';
 
 cube = new Cube([0, 0, 0], [8, 8, 8], [1.5, 1, 1]);
-toolDrag(cube, 0.3, 1);
+toolDrag(cube, 'X', 0.3);
 check('stretch the cube already had is absorbed into whole units, not compounded',
 	cube.size(0) === 12 && near(cube.stretch[0], 1.025), [cube.size(0), cube.stretch[0]]);
 
 cube = new Cube([0, 0, 0], [8, 8, 8]);
-toolDrag(cube, 2, 1);
+toolDrag(cube, 'X', 2);
 check('a gap that comes out whole leaves the stretch at exactly 1',
 	cube.size(0) === 10 && cube.stretch[0] === 1, [cube.size(0), cube.stretch[0]]);
 
