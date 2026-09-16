@@ -2,6 +2,14 @@
 
 Generated from `changelog.json` by `scripts/changelog.mjs`. Edit that file, not this one.
 
+## v1.4.1 - All six handles
+
+_2026-09-16_
+
+### Fixed
+
+- Anchored Stretch: the Resize + Stretch tool now works on all six handles. Dragging the west, down or north one did nothing you could see, because the tool anchored the face you had hold of and moved the far one instead. Comes in at anchored_stretch 1.9.2.
+
 ## v1.4.0 - Gradient Map Layer joins the set
 
 _2026-09-09_

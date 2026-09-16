@@ -1,4 +1,17 @@
 {
+  "1.4.1": {
+    "title": "All six handles",
+    "date": "2026-09-16",
+    "author": "Embody Games",
+    "categories": [
+      {
+        "title": "Fixed",
+        "list": [
+          "Anchored Stretch: the Resize + Stretch tool now works on all six handles. Dragging the west, down or north one did nothing you could see, because the tool anchored the face you had hold of and moved the far one instead. Comes in at anchored_stretch 1.9.2."
+        ]
+      }
+    ]
+  },
   "1.4.0": {
     "title": "Gradient Map Layer joins the set",
     "date": "2026-09-09",
