@@ -17,6 +17,14 @@
       "description": "Keeps a texture's layer stack alive across a save and reload for formats whose file has no concept of layers, by writing a sidecar next to the texture PNG. Desktop only.",
       "tags": ["Texturing", "Layers", "Hytale"],
       "url": "https://raw.githubusercontent.com/Embody-Games/EGT-DeltaLayers/main/module/delta_layers.js"
+    },
+    {
+      "id": "gradient_map_layer",
+      "name": "Gradient Map Layer",
+      "author": "Quinten Bench",
+      "description": "Colourise a value map through a saved gradient ramp, as a layer that keeps following the greyscale it came from and re-renders live as you paint. Gradients live in a library you build up, importable as PNG or Photoshop .grd.",
+      "tags": ["Texturing", "Color", "Layers"],
+      "url": "https://raw.githubusercontent.com/Embody-Games/EGT-GradientMaps/main/module/gradient_map_layer.js"
     }
   ]
 }

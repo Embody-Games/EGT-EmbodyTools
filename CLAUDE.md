@@ -5,10 +5,10 @@ Anchored Stretch, and layer-aware Lock Alpha. `README.md` explains what it does.
 `RELEASING.md` is the authority on cutting a release, including how to push from a
 Cowork session. Read that before releasing anything; this file is orientation.
 
-**This bundle overlaps three standalone repos** — `EGT-DeltaLayers`,
-`EGT-AnchorStretch`, `EGT-UnLeakyLayers` — which are all still live and released
-separately. A fix to one tool usually belongs in both places. Check before assuming
-this bundle is the only home for a change.
+**This bundle overlaps four standalone repos** — `EGT-DeltaLayers`,
+`EGT-AnchorStretch`, `EGT-UnLeakyLayers`, `EGT-GradientMaps` — which are all still
+live and released separately. A fix to one tool usually belongs in both places. Check
+before assuming this bundle is the only home for a change.
 
 ## Shape of the repo
 
@@ -22,7 +22,7 @@ the authority on it; read that before touching a module.
 |---|---|
 | `embodytools.js` | **Generated.** The whole plugin, one file, because that is what Blockbench loads. |
 | `build/assemble.mjs` | The build. `npm run build`, `npm run build:check`. |
-| `build/src/*.js` | The four plugins, verbatim, each at a tagged release. Where a module's code actually lives. Gradient Map Layer has no repo of its own yet, so its copy here is the source of truth. |
+| `build/src/*.js` | The four plugins, verbatim, each at a tagged release. Copies: each one's own repo is where its code lives. Gradient Map Layer was the exception until 2026-09-22, when it got `EGT-GradientMaps`; older notes may still call this copy the source of truth. |
 | `build/frame/*.js` | Bundle-only: header, banners, each module's interface, the one `BBPlugin.register`. Hand-written. |
 | `package.json` | `version` is **the only place the version lives**. The build reads it. |
 | `changelog.json` | Blockbench's changelog format. **The only place release notes are written.** |
