@@ -14,7 +14,7 @@
  *                          resizing a stretched cube from creeping outward on the
  *                          anchored side, adds two modes to Vertex Snap and a
  *                          Resize + Stretch tool of its own.
- *                          Settings > Edit.     Was: anchored_stretch 1.9.2
+ *                          Settings > Edit.     Was: anchored_stretch 1.9.3
  *
  *   3. UNLEAKY LAYERS      Makes Lock Alpha Channel look at every layer, so you can
  *                          paint on an empty layer above your artwork, with a button
@@ -2158,9 +2158,9 @@ const AnchoredStretchModule = (function () {
 	 *     }
 	 *
 	 * For any other tool id `direction` keeps whatever the last resize or stretch drag
-	 * left in it, so every handle arrives claiming the same end of the cube. The three
-	 * negative handles then anchor the face being dragged and move the opposite one,
-	 * which looks like the handle doing nothing at all.
+	 * left in it. setTransformerDirection below puts that right at drag start; this stays
+	 * as the read, because the handle's own name is assigned a few lines above core's test
+	 * and is not gated on the tool either way.
 	 *
 	 * The handle's own name is assigned a few lines above that and is not gated on the
 	 * tool, so read it from there and apply core's test ourselves. Falls back to what
@@ -2172,6 +2172,37 @@ const AnchoredStretchModule = (function () {
 			return handle.charAt(0) === 'N' ? -1 : 1;
 		}
 		return context && context.direction === -1 ? -1 : 1;
+	}
+
+	/**
+	 * Set `Transformer.direction` from the handle that was grabbed, the way core would if
+	 * this tool were one of its own.
+	 *
+	 * This is not cosmetic. onPointerMove resolves the dragged axis with
+	 *
+	 *     var axis = ((scope.direction == false && scope.axis.length == 2)
+	 *         ? scope.axis[1] : scope.axis[0]).toLowerCase();
+	 *
+	 * so a negative handle only resolves to its real axis while `direction` is false. Left
+	 * stale at true, 'NX' takes the `axis[0]` branch and comes out as 'n', getAxisNumber('n')
+	 * is undefined, and the move reaches us with no axis and no usable point, so the drag is
+	 * dropped before any of our code runs. That is the three dead handles on a fresh cube,
+	 * and why one drag with the Stretch tool, which does set `direction`, brought them back.
+	 *
+	 * It has to run from onPointerDown. onStart looks like the natural place and is not:
+	 * dispatchMove only calls onStart once calculateOffset has returned a changed value, so
+	 * on a dead handle, where the offset is always 0, onStart never runs at all and a fix
+	 * put there can never take effect. onPointerDown is dispatched straight from the gizmo's
+	 * own pointerdown, a few lines after it assigns the handle name and before any move.
+	 *
+	 * Plane handles ('XY') and the uniform handle ('E') have to stay on the true branch, and
+	 * core's own test gives us that: only a leading 'N' flips it.
+	 */
+	function setTransformerDirection() {
+		if (typeof Transformer === 'undefined' || !Transformer) return;
+		let handle = Transformer.axis;
+		if (typeof handle !== 'string' || !handle.length) return;
+		Transformer.direction = handle.charAt(0) !== 'N';
 	}
 
 	/** Shift snaps to whole units, Ctrl goes finer, both together finer still. */
@@ -2565,6 +2596,15 @@ const AnchoredStretchModule = (function () {
 		originals.onMove = edit_module.onMove;
 		originals.onEnd = edit_module.onEnd;
 		originals.onCancel = edit_module.onCancel;
+		// Usually undefined: core's edit module does not define one. unpatch writes whatever
+		// was here back, and an undefined onPointerDown is exactly what dispatchPointerDown
+		// expects to find when a module has no hook.
+		originals.onPointerDown = edit_module.onPointerDown;
+
+		wrappers.onPointerDown = function (context) {
+			if (toolActive()) setTransformerDirection();
+			if (originals.onPointerDown) return originals.onPointerDown.call(this, context);
+		};
 
 		wrappers.calculateOffset = function (context) {
 			if (context && context.point && toolActive()) {

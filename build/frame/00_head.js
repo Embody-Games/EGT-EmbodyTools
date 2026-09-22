@@ -14,7 +14,7 @@
  *                          resizing a stretched cube from creeping outward on the
  *                          anchored side, adds two modes to Vertex Snap and a
  *                          Resize + Stretch tool of its own.
- *                          Settings > Edit.     Was: anchored_stretch 1.9.2
+ *                          Settings > Edit.     Was: anchored_stretch 1.9.3
  *
  *   3. UNLEAKY LAYERS      Makes Lock Alpha Channel look at every layer, so you can
  *                          paint on an empty layer above your artwork, with a button
