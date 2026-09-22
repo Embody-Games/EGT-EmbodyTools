@@ -1,0 +1,22 @@
+{
+  "$comment": "The tools EmbodyTools offers. Add an entry here and every contractor sees the new card on their next Blockbench start, with no EmbodyTools release. 'id' must match the id the module returns and is what its cache file and enabled state are keyed by, so never recycle one for a different tool. 'url' is fetched verbatim and unauthenticated, so the repo behind it has to be public. Point at a branch for continuous delivery, or a tag if you want releases to be deliberate. Everything except id, name and url is card presentation, used until the module is fetched, after which the module's own values win.",
+  "version": 1,
+  "tools": [
+    {
+      "id": "anchored_stretch",
+      "name": "Anchored Stretch",
+      "author": "Embody Games",
+      "description": "Only the side you drag ever expands. Makes the Stretch tool one-sided instead of centred, and stops resizing a stretched cube from creeping outward on the anchored side. Adds a Stretch mode to Vertex Snap.",
+      "tags": ["Transform", "Hytale"],
+      "url": "https://raw.githubusercontent.com/Embody-Games/EGT-AnchorStretch/main/module/anchored_stretch.js"
+    },
+    {
+      "id": "delta_layers",
+      "name": "Delta Layers",
+      "author": "Embody Games",
+      "description": "Keeps a texture's layer stack alive across a save and reload for formats whose file has no concept of layers, by writing a sidecar next to the texture PNG. Desktop only.",
+      "tags": ["Texturing", "Layers", "Hytale"],
+      "url": "https://raw.githubusercontent.com/Embody-Games/EGT-DeltaLayers/main/module/delta_layers.js"
+    }
+  ]
+}
