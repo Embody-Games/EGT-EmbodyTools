@@ -50,7 +50,7 @@ const PLUGIN_ID = 'embodytools_next';
 // Bumped on every deploy during testing, so the plugin page shows at a glance whether the
 // running copy is the latest file. If the page does not say this number, Blockbench is
 // reading some other file.
-const PLUGIN_VERSION = '2.5.1';
+const PLUGIN_VERSION = '2.6.0';
 const TAG = '[embodytools]';
 
 const say = (...args) => console.log(TAG, ...args);
@@ -68,8 +68,8 @@ const complain = (...args) => console.error(TAG, ...args);
  *
  * Pin to a tag if you want releases to be deliberate; point at a branch if you want every
  * push to reach everyone on next launch. The fetch is unauthenticated, so the repo has to
- * be public: EGT-AnchorStretch and EGT-DeltaLayers both are. EGT-EmbodyTools is not, which
- * is the one to watch if a module ever moves there.
+ * be public. EGT-AnchorStretch, EGT-DeltaLayers, EGT-UnLeakyLayers and EGT-EmbodyTools all
+ * are, so any of them can host a module.
  *
  * `id` must match the id the module returns, and is what its cache file and its enabled
  * state are keyed by. Do not recycle an id for a different tool.
@@ -458,6 +458,24 @@ function createContext(id) {
 			const handle = Blockbench.addCSS(styles);
 			record('stylesheet', () => { try { handle.delete(); } catch (error) { /* gone already */ } });
 			return handle;
+		},
+
+		/*
+		 * Append a line to plugins/embodytools_modules/debug.log. For working out what a
+		 * module is doing when the dev console is not to hand. Best-effort and silent:
+		 * a module must never break because logging failed.
+		 */
+		log(...parts) {
+			try {
+				const nodeFs = getFs(false);
+				const dir = cacheDir();
+				if (!nodeFs || !dir) return;
+				const line = '[' + new Date().toISOString() + '] ' + id + ' ' + parts.map((p) => {
+					if (typeof p === 'string') return p;
+					try { return JSON.stringify(p); } catch (error) { return String(p); }
+				}).join(' ') + '\n';
+				nodeFs.appendFileSync(nodePath.join(dir, 'debug.log'), line, 'utf8');
+			} catch (error) { /* logging must never be the thing that breaks a tool */ }
 		},
 
 		// Anything the helpers above do not cover.
