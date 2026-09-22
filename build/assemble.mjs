@@ -51,6 +51,15 @@ const OUT = join(root, 'embodytools.js');
 
 const check_only = process.argv.includes('--check');
 
+/*
+ * Every anchor in this file is matched against LF-terminated lines, and the output is
+ * joined with LF. Git stores these sources as LF, but a clone on Windows with the
+ * default core.autocrlf=true checks them out as CRLF, and then not one anchor matches:
+ * the build fails on the first module with "could not find the IIFE opening". Reading
+ * through here makes the build produce the same bytes wherever it runs.
+ */
+const readText = (path) => readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
+
 // Every failure in here is "somebody changed a source and this cannot splice it any
 // more", and the message says which one and what to do about it. A stack trace on top
 // of that is noise, so the message is all that gets printed.
@@ -244,7 +253,7 @@ const trimBlank = (lines) => {
  */
 function extract(module) {
 	const where = module.src;
-	const text = readFileSync(join(build, 'src', module.src), 'utf8');
+	const text = readText(join(build, 'src', module.src));
 	let lines = text.split('\n');
 
 	const version = (text.match(/^const PLUGIN_VERSION = '([^']+)'/m) || [])[1]
@@ -307,7 +316,7 @@ function extract(module) {
 	return { version, body: trimBlank(lines) };
 }
 
-const frame = (name) => readFileSync(join(build, 'frame', name), 'utf8').replace(/\n+$/, '').split('\n');
+const frame = (name) => readText(join(build, 'frame', name)).replace(/\n+$/, '').split('\n');
 const indent = (lines) => lines.map((line) => (line.trim() ? '\t' + line : line));
 
 // The version lives in package.json, where scripts/release.mjs bumps it. It used to
@@ -348,7 +357,8 @@ text = text.replace(/\n{3,}/g, '\n\n').replace(/\n+$/, '') + '\n';
 const summary = built.map(({ module, version }) => `${module.plugin} ${version}`).join(', ');
 
 if (check_only) {
-	const on_disk = readFileSync(OUT, 'utf8');
+	// Normalised too, so --check compares content and not the checkout's line endings.
+	const on_disk = readText(OUT);
 	if (on_disk === text) {
 		console.log(`embodytools.js is what the build produces (v${pkg.version}: ${summary})`);
 		process.exit(0);
