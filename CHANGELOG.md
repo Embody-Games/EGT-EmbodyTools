@@ -2,6 +2,14 @@
 
 Generated from `changelog.json` by `scripts/changelog.mjs`. Edit that file, not this one.
 
+## v1.4.2 - Resize + Stretch works on every side
+
+_2026-09-22_
+
+### Fixed
+
+- Anchored Stretch: on a new cube, three of the six Resize and Stretch handles did nothing at all until you first used the Stretch tool on that side. All six work straight away now.
+
 ## v1.4.1 - All six handles
 
 _2026-09-16_

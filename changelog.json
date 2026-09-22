@@ -1,4 +1,17 @@
 {
+  "1.4.2": {
+    "title": "Resize + Stretch works on every side",
+    "date": "2026-09-22",
+    "author": "Embody Games",
+    "categories": [
+      {
+        "title": "Fixed",
+        "list": [
+          "Anchored Stretch: on a new cube, three of the six Resize and Stretch handles did nothing at all until you first used the Stretch tool on that side. All six work straight away now."
+        ]
+      }
+    ]
+  },
   "1.4.1": {
     "title": "All six handles",
     "date": "2026-09-16",
