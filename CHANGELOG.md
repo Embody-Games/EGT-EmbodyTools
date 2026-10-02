@@ -4,7 +4,7 @@ Generated from `changelog.json` by `scripts/changelog.mjs`. Edit that file, not 
 
 ## v3.0.0 - Your Embody sign-in
 
-_2026-10-01_
+_2026-10-02_
 
 ### Changed
 
