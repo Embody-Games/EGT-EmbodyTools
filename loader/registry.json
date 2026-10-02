@@ -1,0 +1,14 @@
+{
+  "$comment": "The outside tools EmbodyTools offers: tools that are not Embody Games' own, loaded from their own public link with no sign-in. Add an entry and everyone sees the card at their next Blockbench start, with no EmbodyTools release. The team's tools are not listed here: they come from Embody Games' access service, for a signed-in Embody account, and EmbodyTools never loads a link into the Embody-Games GitHub from this list. 'id' must match the id the tool registers, and is what its cache file and its switch are keyed by, so never reuse one for a different tool. 'url' is fetched as it is, with no sign-in. Everything except id, name and url is the card's text, until the tool itself has loaded. No outside tool gets file access ('native') unless Embody Games decides it, and npm test refuses one that asks.",
+  "version": 1,
+  "tools": [
+    {
+      "id": "wynncraft_content_tools",
+      "name": "Wynncraft Content Tools",
+      "author": "Crunkle",
+      "description": "Wynncraft model tools: embed and validate textures, clean up a model for Wynncraft, and set texture drivers, billboard pivots, block and sky brightness and skin shaders. Adds the Wynncraft Actor format.",
+      "tags": ["Wynncraft"],
+      "url": "https://s3.jared.im/persist/wynncraft_content_tools.js"
+    }
+  ]
+}

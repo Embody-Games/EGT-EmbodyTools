@@ -1,0 +1,96 @@
+name: release
+
+# Pushing a v* tag is the trigger. scripts/release.mjs creates the tag.
+on:
+  push:
+    tags: ['v*']
+
+# Nothing by default. Each job asks for only what it needs.
+permissions: {}
+
+# The only per-repo config. Everything else matches the plugin repos.
+env:
+  PLUGIN_FILE: embodytools.js
+  PLUGIN_NAME: EmbodyTools
+  # ?v=3 is a cache buster, not a real file. Discord caches avatar_url against the URL,
+  # so a fetch that failed once keeps showing the default avatar. Bump it if that happens.
+  PLUGIN_ICON_URL: https://raw.githubusercontent.com/Embody-Games/EGT-EmbodyTools/main/embody_tools_icon.png?v=3
+  PLUGIN_COLOR: 5865F2
+  DISCORD_THREAD_ID: '1545788737068335145'
+  # EmbodyTools itself stays public and is installed from its link, so its post gives
+  # that link, unlike the team's tools, which are switched on inside it.
+  PLUGIN_INSTALL_URL: https://raw.githubusercontent.com/Embody-Games/EGT-EmbodyTools/main/embodytools.js
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # Write access is only for publishing the GitHub release. This job never sees the webhook.
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      # Pinned to the commits the v4 tags pointed at, so a moved tag can't change what runs.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Run checks
+        run: npm test
+
+      - name: Tag must agree with PLUGIN_VERSION
+        id: version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          plugin="$(sed -n "s/^const PLUGIN_VERSION = '\(.*\)';$/\1/p" "$PLUGIN_FILE")"
+          if [ -z "$plugin" ]; then
+            echo "could not read PLUGIN_VERSION out of $PLUGIN_FILE"
+            exit 1
+          fi
+          if [ "$tag" != "$plugin" ]; then
+            echo "tag is v$tag but $PLUGIN_FILE says $plugin"
+            exit 1
+          fi
+          echo "version=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ steps.version.outputs.version }}
+        run: |
+          node scripts/changelog.mjs "$V" > RELEASE_NOTES.md
+          TITLE="$(node scripts/changelog.mjs "$V" --title-only)"
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME${TITLE:+: $TITLE}" \
+            --notes-file RELEASE_NOTES.md \
+            "$PLUGIN_FILE" \
+            changelog.json
+
+  # Its own job, so the webhook secret is never next to a token that can write to the repo.
+  # Runs after the release exists, so the embed's link resolves.
+  announce:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      # Non-fatal: a Discord outage should not mark a good release as failed. RELEASING.md
+      # says how to check it.
+      - name: Announce in Discord
+        continue-on-error: true
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          V: ${{ needs.release.outputs.version }}
+        run: node scripts/discord_notify.mjs "$V"

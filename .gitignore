@@ -1,0 +1,16 @@
+node_modules/
+package-lock.json
+RELEASE_NOTES.md
+*.log
+.DS_Store
+
+# Secrets never belong in this repo, which is public. These catch the usual ways one ends
+# up here: env files, wrangler's local secrets and state, a key, a pasted token.
+.env
+.env.*
+.dev.vars
+.wrangler/
+*.pem
+*.key
+*.pat
+*token*.txt

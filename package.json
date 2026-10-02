@@ -1,0 +1,17 @@
+{
+  "name": "egt-embodytools",
+  "version": "3.0.0",
+  "private": true,
+  "description": "EmbodyTools, Embody Games' Blockbench plugin: the team's tools for a signed-in Embody account and outside tools from their own links, each switched on and off as a card",
+  "author": "Embody Games",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Embody-Games/EGT-EmbodyTools.git"
+  },
+  "scripts": {
+    "test": "node scripts/check.mjs",
+    "changelog": "node scripts/changelog.mjs",
+    "release": "node scripts/release.mjs"
+  }
+}
