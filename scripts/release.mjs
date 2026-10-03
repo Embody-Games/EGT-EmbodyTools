@@ -14,6 +14,7 @@
  *   npm run release                                    with the entry already in changelog.json
  *
  *   --changed, --removed, --safeguards   the other categories; every category flag repeats
+ *   --how "..."                          a "How to use" line, listed first
  *   --dry-run                            say what would happen, change nothing
  *   --push                               push main and the tag too; otherwise it prints how
  *
@@ -33,7 +34,7 @@ process.chdir(join(dirname(fileURLToPath(import.meta.url)), '..'));
 
 // What a release changes, and so the only files it ever commits.
 const RELEASE_FILES = ['embodytools.js', 'changelog.json', 'package.json', 'CHANGELOG.md'];
-const CATEGORIES = [['--added', 'Added'], ['--changed', 'Changed'], ['--fixed', 'Fixed'], ['--removed', 'Removed'], ['--safeguards', 'Safeguards']];
+const CATEGORIES = [['--how', 'How to use'], ['--added', 'Added'], ['--changed', 'Changed'], ['--fixed', 'Fixed'], ['--removed', 'Removed'], ['--safeguards', 'Safeguards']];
 
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');

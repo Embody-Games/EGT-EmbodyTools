@@ -19,7 +19,7 @@ Run `npm test`, every time, a change to `loader/registry.json` included. A push 
    ```sh
    npm run release -- --title "Short name" --added "..." --fixed "..."
    ```
-   or plain `npm run release` when `changelog.json` already has the version's entry. It runs `npm test`, writes the entry with today's date, sets `package.json`, regenerates `CHANGELOG.md`, commits `vX.Y.Z: <title>` and tags `vX.Y.Z`. It commits only `embodytools.js`, `changelog.json`, `package.json` and `CHANGELOG.md`, by name, and won't start while any other file is changed or new: commit that on its own first, or remove it. Files git ignores, such as `.env`, don't count. Run again after a commit that worked and a tag that didn't, it tags that commit. `--dry-run` shows what it would do. The categories are `--added`, `--changed`, `--fixed`, `--removed` and `--safeguards`, each repeatable.
+   or plain `npm run release` when `changelog.json` already has the version's entry. It runs `npm test`, writes the entry with today's date, sets `package.json`, regenerates `CHANGELOG.md`, commits `vX.Y.Z: <title>` and tags `vX.Y.Z`. It commits only `embodytools.js`, `changelog.json`, `package.json` and `CHANGELOG.md`, by name, and won't start while any other file is changed or new: commit that on its own first, or remove it. Files git ignores, such as `.env`, don't count. Run again after a commit that worked and a tag that didn't, it tags that commit. `--dry-run` shows what it would do. The categories are `--how` (How to use, listed first), `--added`, `--changed`, `--fixed`, `--removed` and `--safeguards`, each repeatable.
 3. **Publish:**
    ```sh
    git push --follow-tags origin main
