@@ -15,7 +15,9 @@ Installed from that link, Blockbench downloads EmbodyTools again at every start,
 
 Needs Blockbench 5.0.5 or newer. Signing in, and so the team's tools, needs the desktop app, on Windows, macOS or Linux. Outside tools work in the web version too.
 
-If you had the old EmbodyTools 1.x installed from a downloaded file, remove it under **File > Plugins** first. Any of the team's tools you installed on their own, EmbodyTools removes by itself at its first start and switches on as cards instead.
+If you had the old EmbodyTools 1.x installed from a downloaded file, remove it under **File > Plugins** first.
+
+EmbodyTools never removes anything from your plugin list. A team tool you installed on its own keeps running as that copy, and its card says so. To use the card instead, which updates by itself, remove that copy or switch it off under **File > Plugins**.
 
 ## Signing in
 
