@@ -48,8 +48,17 @@ const PLUGIN_ID = 'embodytools';
 // Bumped on every deploy during testing, so the plugin page shows at a glance whether the
 // running copy is the latest file. If the page does not say this number, Blockbench is
 // reading some other file.
-const PLUGIN_VERSION = '3.0.0';
+const PLUGIN_VERSION = '3.0.1';
 const TAG = '[embodytools]';
+
+/*
+ * The plugin's icon, embedded so the loader stays one file wherever it's loaded from:
+ * Blockbench draws any data:image/ icon as a picture (getIconNode), and a bare name such as
+ * 'extension' as a font icon, the puzzle piece. The picture is embody_tools_icon.png in
+ * EGT-EmbodyTools, the one the Discord posts show. Change that, then run `npm run icon` to
+ * write it in here. The release build refuses an icon that isn't that file.
+ */
+const ICON = 'data:image/png;base64,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';
 
 /*
  * The Google sign-in for the team tools, from Part 1 of the plan: the "EmbodyTools desktop"
@@ -1006,7 +1015,8 @@ let registry = REGISTRY.slice();
 function stateOf(id) {
 	const entry = live.get(id);
 	if (!entry) {
-		const locked = teamLock(registry.find((d) => d.id === id));
+		const descriptor = registry.find((d) => d.id === id);
+		const locked = ownCopyLock(descriptor) || teamLock(descriptor);
 		return locked ? { status: 'locked', detail: locked } : { status: 'off', detail: '' };
 	}
 	return { status: entry.status, detail: entry.detail || '', origin: entry.origin || '' };
@@ -1016,14 +1026,11 @@ async function loadModule(descriptor) {
 	if (live.has(descriptor.id)) return live.get(descriptor.id);
 
 	// A team tool that can't be used right now is not loaded, and not remembered as tried,
-	// so it loads as soon as a sign-in or a check-in allows it.
-	const locked = teamLock(descriptor);
+	// so it loads as soon as a sign-in or a check-in allows it. That includes one installed
+	// on its own and switched on in Blockbench: that copy runs, and the two must never run
+	// at once.
+	const locked = ownCopyLock(descriptor) || teamLock(descriptor);
 	if (locked) return { descriptor, status: 'locked', detail: locked, origin: '' };
-	// An old copy installed on its own is removed first (cleanUpOldCopies), which loads this
-	// one once it's gone. The two must never run at once.
-	if (descriptor.team && installedOnItsOwn(descriptor.id)) {
-		return { descriptor, status: 'locked', detail: 'Waiting for the old copy to be removed', origin: '' };
-	}
 
 	const entry = { descriptor, status: 'loading', detail: '', origin: '' };
 	live.set(descriptor.id, entry);
@@ -1246,6 +1253,8 @@ function unloadAll() {
  *                /v1/key, in IndexedDB. Never in the plugins folder. Used only when the
  *                service can't be reached, and only within a week of the last check-in, by
  *                a clock that hasn't been turned back.
+ *   Branches     Each card can load its tool from another branch of its repo (/v1/branches,
+ *                /v1/tools/<id>?branch=), picked per computer. A copy is of one branch.
  */
 const SERVICE_URL = 'https://egt-tool-access.embodygamestools.workers.dev';
 const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
@@ -1270,6 +1279,9 @@ const TEAM_LIST_KEY = 'embodytools.team_tools';
 const REFUSED_KEY = 'embodytools.team_refused';
 // The email of the account signed in here, so a start knows a sign-in was saved. Not secret.
 const SIGNED_IN_KEY = 'embodytools.signed_in_as';
+// The branch picked for each team tool on this computer, when it isn't the tool's default:
+// { "<id>": "<branch>" }. Not secret, and kept across sign-outs.
+const BRANCHES_KEY = 'embodytools.branches';
 
 /*
  * A link into the team's GitHub is never loaded directly: the team's tools only come through
@@ -1900,11 +1912,12 @@ async function unseal(record, label) {
  */
 let copies_epoch = 0;
 
-async function saveCopy(id, source, native) {
+// `branch` is the branch it came from, null for the tool's default.
+async function saveCopy(id, source, native, branch) {
 	if (!team.key) return;
 	const epoch = copies_epoch;
 	try {
-		const sealed = await seal({ source: source, native: native === true }, 'copy:' + id);
+		const sealed = await seal({ source: source, native: native === true, branch: branch || null }, 'copy:' + id);
 		if (epoch !== copies_epoch) return;
 		await idb('copies', 'readwrite', (store) => store.put(sealed, id));
 		if (epoch !== copies_epoch) await idb('copies', 'readwrite', (store) => store.delete(id));
@@ -2077,7 +2090,9 @@ async function serviceRequest(path, as) {
 		if (response.status === 403 && refusalIn(body)) {
 			throw teamError('refused', 'the access service refused: ' + body.status, { reason: body.status });
 		}
-		if (response.status === 404 && body && body.error) throw teamError('missing', 'the access service does not know ' + path);
+		if (response.status === 404 && body && body.error) {
+			throw teamError('missing', 'the access service does not know ' + path, { code: body.error });
+		}
 		if (!response.ok) throw teamError('offline', 'the access service answered ' + response.status);
 		if (as === 'text') return text;
 		if (body === null) throw teamError('offline', 'the access service sent something that isn\'t JSON');
@@ -2169,6 +2184,128 @@ async function refreshTeamList() {
 	redrawPanels();
 }
 
+// ---- branches ----------------------------------------------------------------------
+
+/*
+ * A team tool can load from another branch of its repo, picked on its card. The service
+ * lists what each tool can be switched to (/v1/branches) and reads the tool from the picked
+ * one (/v1/tools/<id>?branch=). A tool pinned to a tag in team-tools.json offers nothing to
+ * pick. The pick is per computer (BRANCHES_KEY) and only kept while it isn't the default.
+ *
+ * The lists come in one request, the first time cards are drawn while online, and again on
+ * Refresh. Without them, from an older service or with the service out of reach, every
+ * picker shows the default and can't be changed.
+ */
+let branch_lists = null; // Map<id, { default, branches }>, empty when they couldn't be listed
+let branches_loading = null;
+
+const BRANCH_NAME = /^[A-Za-z0-9._\/-]{1,100}$/;
+const goodBranch = (name) => typeof name === 'string' && BRANCH_NAME.test(name) && !name.includes('..');
+
+function readBranchChoices() {
+	const out = {};
+	try {
+		const saved = JSON.parse(localStorage.getItem(BRANCHES_KEY) || '{}');
+		if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
+			for (const [id, name] of Object.entries(saved)) {
+				if (/^[a-z0-9_]+$/.test(id) && goodBranch(name)) out[id] = name;
+			}
+		}
+	} catch (error) { /* nothing picked */ }
+	return out;
+}
+
+// The branch picked for a tool here, or null for its default.
+function chosenBranch(id) {
+	return readBranchChoices()[id] || null;
+}
+
+function writeBranchChoice(id, name) {
+	const choices = readBranchChoices();
+	if (name) choices[id] = name;
+	else delete choices[id];
+	try {
+		localStorage.setItem(BRANCHES_KEY, JSON.stringify(choices));
+	} catch (error) {
+		grumble('could not remember the branch picked for ' + id, error);
+	}
+}
+
+// Every tool's branches, in one request, one at a time.
+function refreshBranches() {
+	if (!branches_loading) branches_loading = loadBranches().finally(() => { branches_loading = null; });
+	return branches_loading;
+}
+
+async function loadBranches() {
+	if (team.state !== 'online') return;
+	const epoch = account_epoch;
+	try {
+		const body = await serviceRequest('/v1/branches');
+		if (epoch !== account_epoch) return;
+		const lists = new Map();
+		const tools = body && body.tools && typeof body.tools === 'object' && !Array.isArray(body.tools) ? body.tools : {};
+		for (const [id, info] of Object.entries(tools)) {
+			if (!/^[a-z0-9_]+$/.test(id) || !info || !goodBranch(info.default)) continue;
+			const names = Array.isArray(info.branches) ? info.branches.filter(goodBranch) : [];
+			lists.set(id, { default: info.default, branches: Array.from(new Set(names)) });
+		}
+		branch_lists = lists;
+	} catch (error) {
+		if (error.kind === 'refused') await refuse(error.reason);
+		else grumble('could not list the branches of the team tools', error.message);
+		// Not asked again until Refresh, so a redraw never turns into a stream of requests.
+		if (!branch_lists) branch_lists = new Map();
+	}
+	redrawPanels();
+}
+
+/*
+ * What a team tool's branch picker shows: the default first, then its other branches, and
+ * the picked one even when the list doesn't have it. `value` '' is the default. None at all
+ * while there's no list and nothing picked, as before the service has listed the branches.
+ * Changing it only makes sense online, with a list to pick from, and while EmbodyTools runs
+ * the tool.
+ */
+function branchPicker(descriptor) {
+	if (!descriptor || !descriptor.team) return null;
+	const info = branch_lists ? branch_lists.get(descriptor.id) : null;
+	const picked = chosenBranch(descriptor.id);
+	if (!info && !picked) return null;
+	const options = [{ value: '', label: info ? info.default : 'default' }];
+	if (info) {
+		for (const name of info.branches) if (name !== info.default) options.push({ value: name, label: name });
+	}
+	if (picked && !options.some((option) => option.value === picked)) options.push({ value: picked, label: picked });
+	let title = 'The branch this tool loads from';
+	if (team.state !== 'online') title = 'Branches can be picked while signed in and online';
+	else if (ownCopyLock(descriptor)) title = 'Installed on its own in Blockbench, so that copy runs';
+	else if (!info) title = 'The branches could not be listed. Refresh to try again.';
+	else if (options.length < 2) title = 'This tool has no other branch to pick';
+	return {
+		options,
+		value: picked || '',
+		enabled: team.state === 'online' && !!info && options.length > 1 && !ownCopyLock(descriptor),
+		title,
+	};
+}
+
+/*
+ * Picks a branch for a tool, '' or its default's name for the default. A tool that is running,
+ * or failed, loads again from the new branch. One that's off loads from it when switched on.
+ */
+async function setBranch(id, name) {
+	const info = branch_lists ? branch_lists.get(id) : null;
+	const pick = name && goodBranch(name) && !(info && name === info.default) ? name : null;
+	if (chosenBranch(id) === pick) return;
+	writeBranchChoice(id, pick);
+	say(id + ' loads from ' + (pick ? 'the branch ' + pick : 'its default branch') + ' from now on');
+	if (!live.has(id)) return;
+	unloadModule(id);
+	const descriptor = registry.find((d) => d.id === id);
+	if (descriptor && readEnabled().has(id)) await loadModule(descriptor);
+}
+
 // ---- checking in -------------------------------------------------------------------
 
 let checking = null;
@@ -2239,8 +2376,8 @@ async function handleTeamError(error) {
 /*
  * A check-in, then everything that was waiting for one: after reaching the service again,
  * the fresh list and the tools it allows, and at any check-in that reached it, the tools
- * whose download failed and the ones that were waiting on something, such as an old copy
- * being removed.
+ * whose download failed and the ones that were waiting on something, such as a copy
+ * installed on its own that has since been removed or switched off in Blockbench.
  */
 async function checkInAndCatchUp() {
 	const before = team.state;
@@ -2521,12 +2658,11 @@ async function signIn() {
 		setTeamState('online');
 		say('signed in to the team tools as ' + team.email);
 		await refreshTeamList();
-		// File access was just given, and the list is fresh, so whatever the start could not
-		// clean up goes now.
+		// File access was just given, so an old folder the start could not clear goes now.
 		try {
-			cleanUpOldCopies();
+			cleanUpOldFolder();
 		} catch (error) {
-			complain('could not clean up the old copies of the team tools', error);
+			complain('could not clear the old EmbodyTools folder', error);
 		}
 		if (team.state === 'online') await loadEnabledTeamTools();
 	} catch (error) {
@@ -2550,31 +2686,19 @@ async function signIn() {
 // ---- old copies of the team's tools ----------------------------------------------------
 
 /*
- * The team's tools used to be installed on their own, from their public links, and earlier
- * versions of EmbodyTools kept a plain copy of each in plugins/embodytools_modules. Now that
- * they only come through the service, those old copies go: at every start, and again after
- * a sign-in, which is when file access is usually given. Only these exact names, and only
- * inside Blockbench's own plugins folder:
+ * Plugins installed in Blockbench are never touched, the team's tools included: nothing on
+ * Blockbench's list is uninstalled, switched off or deleted, file included (decided
+ * 2026-10-02; until 3.0.1 a team tool installed on its own was uninstalled, and its card here
+ * switched on instead). One that is switched on in Blockbench runs as that copy, and
+ * EmbodyTools doesn't load its own next to it, since the two must never run at once. Its card
+ * says why (ownCopyLock). Once it's removed or switched off under File > Plugins, the card
+ * loads at the next check-in or start.
  *
- *   - a team tool installed as its own plugin: uninstalled the way Blockbench's own Uninstall
- *     does it, which also deletes Blockbench's copy of it. Its card here is switched on
- *     instead, so the person keeps the tool once signed in, and a message says so.
- *   - plugins/<id>.js left behind with no installation behind it
- *   - plugins/embodytools_modules, where earlier versions kept their copies: a team tool's
- *     copy there is deleted, an outside tool's copy and the tool list move to cacheDir(),
- *     the old debug log goes, and then the folder itself
- *
- * Nothing else in the plugins folder is touched. A tool installed from a file somewhere
- * else on the computer is uninstalled, but that file is the person's and stays.
- * One that was switched off in Blockbench is removed too, and its card here left as it was.
- *
- * Blockbench 5.2 loads every installed plugin at the same time, so one coming from its link
- * can still be on its way when this runs. Uninstalling it then doesn't hold: once it
- * arrives it puts itself back on Blockbench's list, and if its link still works Blockbench
- * also says it failed to load, since it is no longer registered. So one still on its way is
- * left alone, file included, and its team copy is not loaded next to it, until it has
- * arrived. This looks again every second, for a minute at most. Whatever is still on its
- * way after that is left for the next start.
+ * What does go is EmbodyTools' own old folder. Earlier versions kept a plain copy of each tool
+ * in plugins/embodytools_modules, and it is cleared at every start, and again after a sign-in,
+ * which is when file access is usually given (retireOldFolder): a team tool's copy there is
+ * deleted, an outside tool's copy and the tool list move to cacheDir(), the old debug log goes,
+ * and then the folder itself. Nothing else in the plugins folder is touched.
  */
 const TEAM_TOOL_NAMES = {
 	anchored_stretch: 'Anchored Stretch',
@@ -2587,11 +2711,9 @@ const TEAM_TOOL_NAMES = {
 	easyboxuv: 'Easy Box UV',
 	adrullanmodel: 'Adrullan Model',
 };
-const ARRIVAL_CHECK_MS = 1000;
-const ARRIVAL_CHECKS = 60;
-let arrival_timer = null;
-// The tools moved in since this start, for the one message once nothing is left to wait for.
-let moved_now = [];
+const ON_ITS_OWN = 'Installed on its own in Blockbench';
+// The tools already named in the log as installed on their own, once per start.
+const told_on_its_own = new Set();
 
 // The known team tools, and any the service has listed since. Never EmbodyTools itself:
 // this build's id, and the release's, for a test build installed next to it.
@@ -2610,88 +2732,19 @@ function teamToolName(id) {
 }
 
 /*
- * Still on its way: Blockbench has started loading it, and it hasn't arrived yet. Every
- * Plugin Blockbench made for that id counts, not only the one it registered last: with two
- * installation records for one id, both load, and the first to arrive mustn't send the
- * other into "failed to load".
+ * On Blockbench's list and switched on there, whether it has arrived yet or not. One switched
+ * off there never runs: Blockbench still registers it, but skips its onload. A store plugin
+ * with a team tool's id would be someone else's, and two plugins with one id can't both run
+ * either, so it counts too.
  */
-function stillArriving(ids) {
-	const waiting = [];
-	if (typeof Plugins === 'undefined' || !Plugins || !Array.isArray(Plugins.installed)) return waiting;
-	for (const record of Plugins.installed) {
-		if (!record || typeof record.id !== 'string' || !ids.has(record.id) || waiting.includes(record.id)) continue;
-		if (record.source === 'store') continue;
-		const instances = (Array.isArray(Plugins.all) ? Plugins.all : []).filter((p) => p && p.id === record.id && p.source !== 'store');
-		const registered = Plugins.registered && Plugins.registered[record.id];
-		if (registered && !instances.includes(registered)) instances.push(registered);
-		if (instances.some((p) => p.installed !== true)) waiting.push(record.id);
-	}
-	return waiting;
-}
-
-// On Blockbench's own list, whether it has arrived yet or not.
 function installedOnItsOwn(id) {
 	return typeof Plugins !== 'undefined' && !!Plugins && Array.isArray(Plugins.installed)
-		&& Plugins.installed.some((record) => record && record.id === id);
+		&& Plugins.installed.some((record) => record && record.id === id && record.disabled !== true);
 }
 
-/*
- * Installed on their own: each one uninstalled, and whether it was switched on in Blockbench.
- * EmbodyTools' own copies never show up here, since evaluateModule keeps them out of
- * Blockbench's list. Plugins from Blockbench's store are left alone: none of the team's
- * tools is there, so one with the same id is someone else's plugin.
- */
-function uninstallSeparateCopies(ids) {
-	const done = [];
-	if (typeof Plugins === 'undefined' || !Plugins || !Array.isArray(Plugins.installed)) return done;
-	for (const record of Plugins.installed.slice()) {
-		if (!record || typeof record.id !== 'string' || !ids.has(record.id)) continue;
-		if (record.source === 'store') continue;
-		try {
-			const plugin = (Plugins.registered && Plugins.registered[record.id])
-				|| (Array.isArray(Plugins.all) ? Plugins.all.find((p) => p && p.id === record.id) : null);
-			if (plugin && typeof plugin.uninstall === 'function') {
-				plugin.uninstall();
-			} else {
-				// Installed but never loaded, so there is no plugin to ask: taken off Blockbench's
-				// list the way its own uninstall does it, and its file goes with the rest below.
-				const at = Plugins.installed.indexOf(record);
-				if (at !== -1) Plugins.installed.splice(at, 1);
-				if (typeof StateMemory !== 'undefined' && StateMemory && typeof StateMemory.save === 'function') {
-					StateMemory.save('installed_plugins');
-				}
-			}
-			done.push({ id: record.id, on: record.disabled !== true });
-		} catch (error) {
-			complain('could not uninstall the separate copy of ' + record.id, error);
-		}
-	}
-	return done;
-}
-
-// plugins/<id>.js: the ids one was deleted for. Only with file access already given, so a
-// start never asks for it just for this. The next start or sign-in tries again.
-function deleteOldFiles(ids) {
-	const found = new Set();
-	const nodeFs = getFs(false);
-	const base = (typeof Plugins !== 'undefined' && Plugins && Plugins.path) ? Plugins.path : null;
-	if (!nodeFs || !nodePath || !base) return found;
-	for (const id of ids) {
-		const file = nodePath.join(base, id + '.js');
-		try {
-			if (!nodeFs.existsSync(file)) continue;
-			// A link is removed itself; what it points at is never touched.
-			const info = nodeFs.lstatSync(file);
-			if (!info.isFile() && !info.isSymbolicLink()) continue;
-			nodeFs.unlinkSync(file);
-			found.add(id);
-			say('deleted an old copy of ' + id + ': ' + file);
-		} catch (error) {
-			// Blockbench's own uninstall deletes its copy a moment later, so it may be gone.
-			if (!error || error.code !== 'ENOENT') grumble('could not delete ' + file, (error && error.message) || error);
-		}
-	}
-	return found;
+// Why a team tool's card can't load EmbodyTools' copy: one installed on its own runs instead.
+function ownCopyLock(descriptor) {
+	return descriptor && descriptor.team && installedOnItsOwn(descriptor.id) ? ON_ITS_OWN : null;
 }
 
 /*
@@ -2701,8 +2754,7 @@ function deleteOldFiles(ids) {
  * The tool list goes: it is always from an earlier version, which listed the team's tools
  * by their old links, and the built-in list does better until the next fetch. So do the old
  * debug logs. Then the folder goes too, unless something else is in it, which isn't
- * EmbodyTools' to delete. `ids` is every team tool, including any still on its way, so
- * none of their copies ever moves.
+ * EmbodyTools' to delete. `ids` is every team tool, so none of their copies ever moves.
  */
 function retireOldFolder(ids) {
 	const deleted = new Set();
@@ -2757,87 +2809,11 @@ function retireOldFolder(ids) {
 	return deleted;
 }
 
-// Switched on here, so someone who had the tool on its own still has it once signed in.
-function switchOnCards(ids) {
-	try {
-		const remembered = readRememberedEnabled();
-		for (const id of ids) {
-			if (!remembered.includes(id)) remembered.push(id);
-			writeSetting(id, true);
-		}
-		localStorage.setItem(STATE_KEY, JSON.stringify(remembered));
-	} catch (error) {
-		grumble('could not switch the moved tools on', error);
-	}
-}
-
-function listOf(names) {
-	return names.length < 2 ? names.join('') : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
-}
-
-function showMovedMessage(ids) {
-	if (typeof Blockbench === 'undefined' || !Blockbench.showMessageBox) return;
-	const names = ids.map(teamToolName);
-	const one = names.length === 1;
-	Blockbench.showMessageBox({
-		title: 'Moved into EmbodyTools',
-		message: listOf(names) + (one ? ' was' : ' were') + ' installed on ' + (one ? 'its' : 'their')
-			+ ' own. EmbodyTools removed ' + (one ? 'that copy' : 'those copies') + ' and switched ' + (one ? 'it' : 'them')
-			+ ' on here instead, where ' + (one ? 'it loads' : 'they load') + ' with your Embody sign-in.',
-		icon: 'extension',
-	});
-}
-
-function stopWaitingForOldCopies() {
-	if (arrival_timer) clearTimeout(arrival_timer);
-	arrival_timer = null;
-	moved_now = [];
-}
-
-/*
- * Desktop only: the web app keeps no plugin files, and can't run the team tools at all.
- * `checks` is how many times this has looked again for one still on its way. Returns what
- * was done, for the harness.
- */
-function cleanUpOldCopies(checks = 0) {
-	if (!isDesktop) return { uninstalled: [], deleted: [], waiting: [] };
-	if (arrival_timer) clearTimeout(arrival_timer);
-	arrival_timer = null;
-	const all = teamToolIds();
-	const waiting = stillArriving(all);
-	// A store plugin's plugins/<id>.js is the copy Blockbench runs it from, so it stays too.
-	const from_store = new Set((typeof Plugins !== 'undefined' && Plugins && Array.isArray(Plugins.installed) ? Plugins.installed : [])
-		.filter((record) => record && record.source === 'store').map((record) => record.id));
-	const ids = new Set(Array.from(all).filter((id) => !waiting.includes(id) && !from_store.has(id)));
-	const removed = uninstallSeparateCopies(ids);
-	const deleted = Array.from(new Set([...deleteOldFiles(ids), ...retireOldFolder(all)]));
-	const uninstalled = Array.from(new Set(removed.map((copy) => copy.id)));
-	if (uninstalled.length) {
-		say('uninstalled the separate copies of ' + uninstalled.join(', '));
-		const switched = uninstalled.filter((id) => removed.some((copy) => copy.id === id && copy.on));
-		if (switched.length) switchOnCards(switched);
-		for (const id of switched) if (!moved_now.includes(id)) moved_now.push(id);
-		// By the time this has had to wait, the start has loaded what it could, so the
-		// team's own copies of these load now.
-		if (checks > 0) {
-			loadEnabledTeamTools().catch((error) => complain('could not load the tools that moved in', error));
-		}
-	}
-	if (waiting.length && checks < ARRIVAL_CHECKS) {
-		arrival_timer = setTimeout(() => {
-			arrival_timer = null;
-			if (!loader) return;
-			try {
-				cleanUpOldCopies(checks + 1);
-			} catch (error) {
-				complain('could not clean up the old copies of the team tools', error);
-			}
-		}, ARRIVAL_CHECK_MS);
-	} else if (moved_now.length) {
-		showMovedMessage(moved_now);
-		moved_now = [];
-	}
-	return { uninstalled, deleted, waiting };
+// Desktop only: the web app keeps no plugin files. Returns the ids whose old copies were
+// deleted, for the harness.
+function cleanUpOldFolder() {
+	if (!isDesktop) return [];
+	return Array.from(retireOldFolder(teamToolIds()));
 }
 
 // ---- at start ------------------------------------------------------------------------
@@ -2900,17 +2876,25 @@ async function retryTeamStartup() {
 	if (team.state === 'online' || team.state === 'offline') await loadEnabledTeamTools();
 }
 
-// The team tools that are switched on and not running yet, now that they can be. One still
-// installed on its own waits until cleanUpOldCopies has removed that copy, so the two never
-// run at once.
+// The team tools that are switched on and not running yet, now that they can be. One
+// installed on its own and switched on in Blockbench is left to that copy, so the two never
+// run at once, and named in the log once per start.
 async function loadEnabledTeamTools() {
 	if (!loader) return;
 	const generation = load_generation;
 	const enabled = readEnabled();
 	for (const descriptor of registry.slice()) {
 		if (!stillRunning(generation)) return;
-		if (descriptor.team && enabled.has(descriptor.id) && !live.has(descriptor.id)
-			&& !installedOnItsOwn(descriptor.id)) await loadModule(descriptor);
+		if (!descriptor.team || !enabled.has(descriptor.id) || live.has(descriptor.id)) continue;
+		if (installedOnItsOwn(descriptor.id)) {
+			if (!told_on_its_own.has(descriptor.id)) {
+				told_on_its_own.add(descriptor.id);
+				say(teamToolName(descriptor.id) + ' is installed on its own in Blockbench, so that copy runs'
+					+ ' and EmbodyTools leaves it alone');
+			}
+			continue;
+		}
+		await loadModule(descriptor);
 	}
 	redrawPanels();
 }
@@ -2940,13 +2924,16 @@ function teamLock(descriptor) {
 }
 
 // Where a team tool's code comes from: the service, or when it can't be reached, the copy.
+// Either way from the branch picked on its card, or its default.
 async function fetchTeamSource(descriptor) {
 	let failed = null;
+	const branch = chosenBranch(descriptor.id);
 	if (team.state === 'online') {
 		try {
-			const source = await serviceRequest('/v1/tools/' + encodeURIComponent(descriptor.id), 'text');
+			const source = await serviceRequest('/v1/tools/' + encodeURIComponent(descriptor.id)
+				+ (branch ? '?branch=' + encodeURIComponent(branch) : ''), 'text');
 			if (!source || !source.trim()) throw new Error('the access service sent an empty file');
-			await saveCopy(descriptor.id, source, descriptor.native);
+			await saveCopy(descriptor.id, source, descriptor.native, branch);
 			return { source: source, origin: 'service', native: descriptor.native === true };
 		} catch (error) {
 			if (error.kind === 'refused') {
@@ -2957,6 +2944,15 @@ async function fetchTeamSource(descriptor) {
 				setTeamState('expired');
 				throw new Error(TEAM_MESSAGES.expired);
 			}
+			// A picked branch that's gone, or was never one: back to the default.
+			if (branch && error.kind === 'missing' && error.code === 'unknown_branch') {
+				writeBranchChoice(descriptor.id, null);
+				grumble('the branch ' + branch + ' of ' + descriptor.id + ' is gone, so it loads from its default branch again');
+				return fetchTeamSource(descriptor);
+			}
+			if (branch && error.kind === 'missing' && error.code === 'not_on_branch') {
+				throw new Error('The branch ' + branch + ' doesn\'t have this tool. Pick another branch.');
+			}
 			if (error.kind !== 'offline') throw error;
 			failed = error;
 			grumble('could not fetch ' + descriptor.id + ' from the access service, trying the offline copy', error.message);
@@ -2965,10 +2961,15 @@ async function fetchTeamSource(descriptor) {
 	const last = team.lastCheck || await readLastCheck();
 	if (team.key && withinGrace(last) && !isRefused()) {
 		const copy = await readCopy(descriptor.id);
-		if (copy) return { source: copy.source, origin: 'offline copy', native: copy.native === true };
+		// A copy is of one branch, and never passed off as another. Copies from before branches
+		// are of the default.
+		if (copy && (copy.branch || null) === branch) {
+			return { source: copy.source, origin: 'offline copy', native: copy.native === true };
+		}
 		// Signed in and online, the service just couldn't send it: say that, not "offline".
 		if (failed) throw new Error('The access service could not send it right now (' + failed.message + '). It tries again at the next check-in.');
-		throw new Error('offline, and there is no copy of it on this computer yet');
+		throw new Error(copy ? 'offline, and the copy on this computer is from another branch'
+			: 'offline, and there is no copy of it on this computer yet');
 	}
 	if (failed) throw new Error('The access service could not send it right now (' + failed.message + '). It tries again at the next check-in.');
 	throw new Error(TEAM_LOCKS[team.state] || 'Sign in to use');
@@ -3087,6 +3088,26 @@ const BROWSER_CSS = `
 }
 /* 40 width - 16 knob - 3 inset = 21, so the gap matches the 3px on the other end. */
 .et-switch-on .et-knob { left: 21px; }
+/*
+ * The branch picker. Every dimension is pinned, like the switch's: Blockbench gives every
+ * <select> a 30px height, its own padding, display: flex and no arrow.
+ */
+.et-branch-wrap { position: relative; display: inline-flex; flex: 0 1 auto; min-width: 0; max-width: 128px; }
+.et-branch {
+	display: block; flex: 1 1 auto; width: 100%; min-width: 48px; height: 22px; min-height: 22px;
+	box-sizing: border-box; margin: 0; padding: 0 20px 0 7px; border-radius: 4px;
+	font-size: 11px; line-height: 20px; cursor: pointer; appearance: none; -webkit-appearance: none;
+	background: var(--color-back); color: var(--color-text); border: 1px solid var(--color-border);
+	white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.et-branch:hover { border-color: var(--color-accent); color: var(--color-text); }
+.et-branch:focus { outline: none; border-color: var(--color-accent); text-decoration: none; }
+.et-branch:disabled { opacity: .55; cursor: default; border-color: var(--color-border); }
+.et-branch-arrow {
+	position: absolute; right: 3px; top: 50%; transform: translateY(-50%);
+	font-size: 16px; line-height: 1; pointer-events: none; color: var(--color-subtle_text);
+}
+.et-branch:disabled + .et-branch-arrow { opacity: .55; }
 .et-empty { padding: 34px; text-align: center; color: var(--color-subtle_text); font-size: 13px; }
 .et-foot-note { font-size: 11px; color: var(--color-subtle_text); }
 
@@ -3280,6 +3301,10 @@ function buildCardPanel(options) {
 	grid.className = 'et-grid';
 
 	const draw = () => {
+		// The branch lists, the first time cards are drawn while online.
+		if (branch_lists === null && team.state === 'online') {
+			refreshBranches().catch((error) => complain('could not list the branches', error));
+		}
 		account.replaceChildren(buildAccountRow());
 		const query = search.value.trim().toLowerCase();
 		grid.innerHTML = '';
@@ -3372,6 +3397,42 @@ function buildCardPanel(options) {
 				}
 			});
 			foot.appendChild(status);
+
+			// A team tool's branch, next to its switch. Blockbench strips every <select> of its
+			// arrow, so it gets one of its own.
+			const picker = branchPicker(descriptor);
+			if (picker) {
+				const wrap = document.createElement('span');
+				wrap.className = 'et-branch-wrap';
+				wrap.title = picker.title;
+				const select = document.createElement('select');
+				select.className = 'et-branch';
+				select.title = picker.title;
+				for (const option of picker.options) {
+					const element = document.createElement('option');
+					element.value = option.value;
+					element.textContent = option.label;
+					select.appendChild(element);
+				}
+				select.value = picker.value;
+				select.disabled = !picker.enabled;
+				select.addEventListener('change', async () => {
+					select.disabled = true;
+					toggle.disabled = true;
+					status.textContent = 'switching...';
+					try {
+						await setBranch(descriptor.id, select.value);
+					} finally {
+						redrawPanels();
+					}
+				});
+				const arrow = document.createElement('i');
+				arrow.className = 'material-icons et-branch-arrow';
+				arrow.textContent = 'expand_more';
+				wrap.appendChild(select);
+				wrap.appendChild(arrow);
+				foot.appendChild(wrap);
+			}
 			foot.appendChild(toggle);
 
 			card.appendChild(head);
@@ -3424,6 +3485,10 @@ function buildCardPanel(options) {
 			await fetchRegistry();
 			if (CHECKS_IN.has(team.state)) await checkIn();
 			if (team.state === 'online') await refreshTeamList();
+			if (team.state === 'online') {
+				branch_lists = null;
+				await refreshBranches();
+			}
 			registerModuleSettings();
 			for (const id of on) {
 				const descriptor = registry.find((e) => e.id === id);
@@ -3591,7 +3656,7 @@ registrar.register(PLUGIN_ID, {
 	author: 'Embody Games',
 	description: 'Embody Games internal toolset. Team tools load for a signed-in Embody account, '
 		+ 'outside tools from their own links, and each is switched on and off from a list inside the plugin.',
-	icon: 'extension',
+	icon: ICON,
 	version: PLUGIN_VERSION,
 	tags: ['Texturing', 'Layers', 'Hytale'],
 	variant: 'both',
@@ -3652,20 +3717,19 @@ registrar.register(PLUGIN_ID, {
 		}
 		loader.ctx.cleanup('a sign-in in progress', () => { if (cancel_sign_in) cancel_sign_in(); });
 		loader.ctx.cleanup('panels on screen', () => panels.clear());
-		loader.ctx.cleanup('the wait for old copies on their way', stopWaitingForOldCopies);
+		told_on_its_own.clear();
 
 		// Outside tools first, so a slow check-in never holds them up. Then the check-in, and
 		// only after it any team tool. A Disable before this finishes stops it where it is.
 		const generation = ++load_generation;
 		const current = () => generation === load_generation && !!loader;
 		setTimeout(async () => {
-			// Old copies of the team's tools first, so none of them is still running by the
-			// time EmbodyTools loads its own. One still on its way is waited for, and its team
-			// copy loads once it has gone.
+			// EmbodyTools' own old folder, from earlier versions. Plugins installed in
+			// Blockbench are never touched.
 			try {
-				cleanUpOldCopies();
+				cleanUpOldFolder();
 			} catch (error) {
-				complain('could not clean up the old copies of the team tools', error);
+				complain('could not clear the old EmbodyTools folder', error);
 			}
 			await fetchRegistry();
 			if (!current()) return;

@@ -1,4 +1,29 @@
 {
+	"3.0.1": {
+		"title": "A branch picker, and your plugins stay put",
+		"author": "Embody Games",
+		"date": "2026-10-03",
+		"categories": [
+			{
+				"title": "Added",
+				"list": [
+					"A branch picker next to each team tool's switch. It lists the branches of the tool's repo, default first, and loads the tool from the one you pick, on this computer only."
+				]
+			},
+			{
+				"title": "Changed",
+				"list": [
+					"EmbodyTools never removes anything from your plugin list. A team tool you installed on its own keeps running as that copy, and its card says so. To use the card instead, which updates by itself, remove that copy or switch it off under File > Plugins."
+				]
+			},
+			{
+				"title": "Fixed",
+				"list": [
+					"EmbodyTools has its own icon in the plugin list again, instead of the puzzle piece."
+				]
+			}
+		]
+	},
 	"3.0.0": {
 		"title": "Your Embody sign-in",
 		"author": "Embody Games",

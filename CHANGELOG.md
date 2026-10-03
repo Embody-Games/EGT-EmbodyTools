@@ -2,6 +2,22 @@
 
 Generated from `changelog.json` by `scripts/changelog.mjs`. Edit that file, not this one.
 
+## v3.0.1 - A branch picker, and your plugins stay put
+
+_2026-10-03_
+
+### Added
+
+- A branch picker next to each team tool's switch. It lists the branches of the tool's repo, default first, and loads the tool from the one you pick, on this computer only.
+
+### Changed
+
+- EmbodyTools never removes anything from your plugin list. A team tool you installed on its own keeps running as that copy, and its card says so. To use the card instead, which updates by itself, remove that copy or switch it off under File > Plugins.
+
+### Fixed
+
+- EmbodyTools has its own icon in the plugin list again, instead of the puzzle piece.
+
 ## v3.0.0 - Your Embody sign-in
 
 _2026-10-02_
