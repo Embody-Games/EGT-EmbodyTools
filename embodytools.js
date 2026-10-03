@@ -48,7 +48,7 @@ const PLUGIN_ID = 'embodytools';
 // Bumped on every deploy during testing, so the plugin page shows at a glance whether the
 // running copy is the latest file. If the page does not say this number, Blockbench is
 // reading some other file.
-const PLUGIN_VERSION = '3.0.1';
+const PLUGIN_VERSION = '3.1.0';
 const TAG = '[embodytools]';
 
 /*
@@ -2993,6 +2993,345 @@ function rebuildRegistry() {
 }
 
 // ===========================================================================
+// ===== WHAT'S NEW ==========================================================
+// ===========================================================================
+
+/*
+ * Quinten's idea (2026-10-03): when EmbodyTools or any team tool has a new version, the
+ * first model opened or made after that says what changed and how to use it, once.
+ *
+ * The notes are each release's entry in its changelog.json, Blockbench's own changelog
+ * format, which every Embody Games tool's release writes and its Discord post is made from:
+ * EmbodyTools' own from its public repo, next to the registry, and every team tool's from
+ * the service (/v1/changelogs), switched on here or not. A "How to use" category, which a
+ * release can have, comes first.
+ *
+ * NOTES_SEEN_KEY keeps the newest version shown: EmbodyTools' own (`own`) and each team
+ * tool's (`team`). Without `own` yet, only EmbodyTools' current notes show. Without `team`
+ * yet, the first time the team's notes are read, every team tool counts as seen at its
+ * current version, so nobody gets every tool's history at once. A tool that turns up in
+ * the list after that shows its latest notes as new. Only a newer version counts, so a
+ * branch picked on a card or a version taken back never shows anything.
+ *
+ * At most once a Blockbench session: on the first project selected after start (a model
+ * opened or made, Blockbench's select_project), once the notes say there's something new,
+ * and only while no other dialog is open. Closing it, any way, marks what it showed as seen.
+ * The What's new button above the cards shows the latest notes of everything at any time.
+ */
+const NOTES_SEEN_KEY = 'embodytools.notes_seen';
+const OWN_NOTES_ID = 'embodytools'; // EmbodyTools' own group in the window
+const HOW_TO_USE = 'How to use';
+const NOTES_SHOWN_PER_TOOL = 3;
+const NOTES_DELAY_MS = 800; // after the project is selected, so it loads, and its own dialogs open, first
+const NOTES_WAIT_MS = 60 * 1000; // for another dialog to close, before trying again at the next project
+// EmbodyTools' own changelog.json is at the top of its public repo, next to loader/.
+const OWN_NOTES_URL = typeof REGISTRY_URL === 'string' && /\/loader\/registry\.json$/.test(REGISTRY_URL)
+	? REGISTRY_URL.replace(/\/loader\/registry\.json$/, '/changelog.json') : null;
+
+let notes_done = false; // shown, or nothing new, this session
+let notes_busy = false; // a look is under way, or one is waiting to start
+
+const NOTE_VERSION = /^\d{1,6}\.\d{1,6}\.\d{1,6}$/;
+// The x.y.z at the start, so a test build's version with a suffix counts as its x.y.z.
+const LEADING_VERSION = /^(\d{1,6})\.(\d{1,6})\.(\d{1,6})/;
+
+// Negative when a is older than b, positive when newer, 0 when the same.
+function compareVersions(a, b) {
+	const x = LEADING_VERSION.exec(String(a)) || [0, 0, 0, 0];
+	const y = LEADING_VERSION.exec(String(b)) || [0, 0, 0, 0];
+	for (let i = 1; i <= 3; i++) {
+		const d = Number(x[i]) - Number(y[i]);
+		if (d) return d;
+	}
+	return 0;
+}
+
+// The record of what was shown: { own: version or null, team: { id: version } or null }.
+function readNotesSeen() {
+	const out = { own: null, team: null };
+	try {
+		const saved = JSON.parse(localStorage.getItem(NOTES_SEEN_KEY) || 'null');
+		if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
+			if (typeof saved.own === 'string' && NOTE_VERSION.test(saved.own)) out.own = saved.own;
+			if (saved.team && typeof saved.team === 'object' && !Array.isArray(saved.team)) {
+				out.team = {};
+				for (const [id, version] of Object.entries(saved.team)) {
+					if (/^[a-z0-9_]+$/.test(id) && typeof version === 'string' && NOTE_VERSION.test(version)) out.team[id] = version;
+				}
+			}
+		}
+	} catch (error) { /* nothing shown yet */ }
+	return out;
+}
+
+function writeNotesSeen(seen) {
+	try {
+		localStorage.setItem(NOTES_SEEN_KEY, JSON.stringify({ own: seen.own || undefined, team: seen.team || undefined }));
+	} catch (error) {
+		grumble('could not remember which release notes were shown', error);
+	}
+}
+
+/*
+ * Release notes as the window shows them, whatever came in: [{ version, title, date,
+ * categories: [{ title, list }] }], newest first, plain text only, cut to size.
+ */
+function tidyEntries(list) {
+	const out = [];
+	for (const entry of Array.isArray(list) ? list : []) {
+		if (!entry || typeof entry !== 'object' || typeof entry.version !== 'string' || !NOTE_VERSION.test(entry.version)) continue;
+		const categories = [];
+		for (const category of Array.isArray(entry.categories) ? entry.categories : []) {
+			if (!category || typeof category.title !== 'string' || !category.title.trim() || !Array.isArray(category.list)) continue;
+			const lines = category.list.filter((line) => typeof line === 'string' && line.trim()).slice(0, 40)
+				.map((line) => line.trim().slice(0, 1000));
+			if (lines.length && categories.length < 10) categories.push({ title: category.title.trim().slice(0, 60), list: lines });
+		}
+		const title = typeof entry.title === 'string' ? entry.title.trim().slice(0, 200) : '';
+		const date = typeof entry.date === 'string' ? entry.date.trim().slice(0, 40) : '';
+		if (title || categories.length) out.push({ version: entry.version, title, date, categories });
+	}
+	return out.sort((a, b) => compareVersions(b.version, a.version));
+}
+
+// A changelog.json as Blockbench keeps it: { "1.2.0": { title, date, categories } }.
+function changelogEntries(data) {
+	if (!data || typeof data !== 'object' || Array.isArray(data)) return [];
+	return tidyEntries(Object.entries(data).map(([version, entry]) =>
+		(entry && typeof entry === 'object' && !Array.isArray(entry) ? Object.assign({}, entry, { version }) : null)));
+}
+
+// EmbodyTools' own notes, from its public repo. None when they can't be read.
+async function fetchOwnNotes() {
+	if (!OWN_NOTES_URL) return [];
+	try {
+		const { response, text } = await fetchWithin(OWN_NOTES_URL + '?v=' + Date.now());
+		if (!response.ok) throw new Error('HTTP ' + response.status);
+		return changelogEntries(parseJson(text));
+	} catch (error) {
+		grumble('could not read EmbodyTools\' release notes', error.message);
+		return [];
+	}
+}
+
+/*
+ * Every team tool's notes, from the service: Map<id, entries>. Empty from a service older
+ * than /v1/changelogs, and null when they couldn't be read this time.
+ */
+async function fetchTeamNotes() {
+	if (team.state !== 'online') return null;
+	const epoch = account_epoch;
+	try {
+		const body = await serviceRequest('/v1/changelogs');
+		if (epoch !== account_epoch) return null;
+		const tools = body && body.tools && typeof body.tools === 'object' && !Array.isArray(body.tools) ? body.tools : {};
+		const out = new Map();
+		for (const [id, info] of Object.entries(tools)) {
+			if (!/^[a-z0-9_]+$/.test(id) || !info || typeof info !== 'object') continue;
+			const entries = tidyEntries(info.entries);
+			if (entries.length) out.set(id, entries);
+		}
+		return out;
+	} catch (error) {
+		if (error.kind === 'refused') {
+			await refuse(error.reason);
+			return null;
+		}
+		if (error.kind === 'missing') return new Map();
+		grumble('could not read the team tools\' release notes', error.message);
+		return null;
+	}
+}
+
+/*
+ * What the window would show: [{ id, name, entries, more, isNew, description, off }],
+ * EmbodyTools first, then the team tools in the list's order. `team_notes` null is notes
+ * that couldn't be read this time.
+ */
+function newNotes(seen, own, team_notes) {
+	const groups = [];
+	const own_entries = own.filter((entry) => compareVersions(entry.version, PLUGIN_VERSION) <= 0
+		&& (seen.own ? compareVersions(entry.version, seen.own) > 0 : compareVersions(entry.version, PLUGIN_VERSION) === 0));
+	if (own_entries.length) groups.push({ id: OWN_NOTES_ID, name: 'EmbodyTools', entries: own_entries });
+	if (seen.team && team_notes) {
+		const enabled = readEnabled();
+		for (const descriptor of team.list) {
+			const entries = team_notes.get(descriptor.id);
+			if (!entries || !entries.length) continue;
+			const last = seen.team[descriptor.id];
+			const group = { id: descriptor.id, name: descriptor.name || descriptor.id, off: !enabled.has(descriptor.id) };
+			if (!last) {
+				Object.assign(group, { entries: entries.slice(0, 1), isNew: true, description: descriptor.description || '' });
+			} else {
+				group.entries = entries.filter((entry) => compareVersions(entry.version, last) > 0);
+			}
+			if (group.entries.length) groups.push(group);
+		}
+	}
+	for (const group of groups) {
+		group.more = Math.max(0, group.entries.length - NOTES_SHOWN_PER_TOOL);
+		group.entries = group.entries.slice(0, NOTES_SHOWN_PER_TOOL);
+	}
+	return groups;
+}
+
+// What the window showed counts as seen: each tool's newest version in it.
+function markNotesSeen(groups) {
+	const seen = readNotesSeen();
+	const newer = (version, than) => !than || compareVersions(version, than) > 0;
+	for (const group of groups) {
+		const newest = group.entries[0] && group.entries[0].version;
+		if (!newest) continue;
+		if (group.id === OWN_NOTES_ID) {
+			if (newer(newest, seen.own)) seen.own = newest;
+		} else {
+			seen.team = seen.team || {};
+			if (newer(newest, seen.team[group.id])) seen.team[group.id] = newest;
+		}
+	}
+	writeNotesSeen(seen);
+}
+
+const escapeHtml = (text) => String(text).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;' })[c]);
+
+// One line of notes, with the bit of Markdown they use (**bold**, `code`, links), through
+// Blockbench's own pureMarked, which cleans what it makes. Without it, plain text.
+function noteLine(text) {
+	if (typeof pureMarked === 'function') {
+		try {
+			return String(pureMarked(text)).trim().replace(/^<p>([\s\S]*)<\/p>$/, '$1');
+		} catch (error) { /* plain text below */ }
+	}
+	return escapeHtml(text);
+}
+
+// The window's contents. Every piece of text from the notes is escaped or cleaned.
+function notesHtml(groups) {
+	let html = '';
+	for (const group of groups) {
+		html += '<section class="et-notes-tool"><h2>' + escapeHtml(group.name)
+			+ (group.isNew ? ' <span class="et-notes-badge">New</span>' : '') + '</h2>';
+		if (group.isNew && group.description) html += '<p class="et-notes-note">' + escapeHtml(group.description) + '</p>';
+		if (group.off) html += '<p class="et-notes-note">Switched off on this computer. Switch it on in Tools &gt; EmbodyTools.</p>';
+		for (const entry of group.entries) {
+			html += '<h3>' + escapeHtml(entry.version + (entry.title ? ': ' + entry.title : '')) + '</h3>';
+			const how = entry.categories.filter((category) => category.title === HOW_TO_USE);
+			for (const category of how.concat(entry.categories.filter((category) => category.title !== HOW_TO_USE))) {
+				html += '<h4' + (category.title === HOW_TO_USE ? ' class="et-notes-how"' : '') + '>' + escapeHtml(category.title) + '</h4><ul>'
+					+ category.list.map((line) => '<li>' + noteLine(line) + '</li>').join('') + '</ul>';
+			}
+		}
+		if (group.more) html += '<p class="et-notes-note">And ' + group.more + ' older version' + (group.more === 1 ? '' : 's') + '.</p>';
+		html += '</section>';
+	}
+	return html;
+}
+
+// The window itself. `on_close` runs once, however it's closed.
+function showNotesDialog(groups, on_close) {
+	const html = notesHtml(groups);
+	let closed = false;
+	const dialog = new Dialog({
+		id: 'embodytools_whats_new',
+		title: 'What\'s new in EmbodyTools',
+		width: 680,
+		buttons: ['Got it'],
+		notes: groups,
+		component: {
+			template: '<div class="et-notes"></div>',
+			mounted() { this.$el.innerHTML = html; },
+		},
+		// One button is both confirm and cancel, and onButton follows either.
+		onButton() {
+			if (closed) return;
+			closed = true;
+			if (on_close) on_close();
+		},
+	});
+	dialog.show();
+	return dialog;
+}
+
+const otherDialogOpen = () => typeof Dialog !== 'undefined' && !!Dialog.open;
+
+/*
+ * What's new now, from notes already read: the record read fresh, and the team's baseline
+ * taken the first time their notes are in.
+ */
+function currentNews(own, team_notes) {
+	const seen = readNotesSeen();
+	// Not from an answer with no notes at all, such as an older service's: that would take
+	// nothing as seen, and every tool would show as new once the notes come.
+	if (!seen.team && team_notes && team_notes.size) {
+		seen.team = {};
+		for (const [id, entries] of team_notes) seen.team[id] = entries[0].version;
+		writeNotesSeen(seen);
+	}
+	return newNotes(seen, own, team_notes);
+}
+
+/*
+ * The look at the first project: the notes read, and the window shown if there's anything
+ * new. A look that couldn't read the team's notes while online tries again at the next one.
+ */
+async function lookForNews(generation) {
+	if (notes_done || !stillRunning(generation)) return;
+	// Whether the team's notes can be read at all depends on the check-in at start.
+	for (let waited = 0; team.state === 'checking' && waited < 15000; waited += 300) await new Promise((r) => setTimeout(r, 300));
+	const [own, team_notes] = await Promise.all([fetchOwnNotes(), fetchTeamNotes()]);
+	if (notes_done || !stillRunning(generation)) return;
+	const retry = !team_notes && team.state === 'online';
+	if (!currentNews(own, team_notes).length) {
+		if (!retry) notes_done = true;
+		return;
+	}
+	for (let waited = 0; otherDialogOpen(); waited += 500) {
+		if (waited >= NOTES_WAIT_MS || !stillRunning(generation)) return;
+		await new Promise((r) => setTimeout(r, 500));
+	}
+	if (notes_done || !stillRunning(generation)) return;
+	// Again, in case the record changed while another dialog was open.
+	const groups = currentNews(own, team_notes);
+	if (!groups.length) return;
+	notes_done = !retry;
+	showNotesDialog(groups, () => markNotesSeen(groups));
+}
+
+// Blockbench's select_project: a model opened, made, or its tab picked.
+function onProjectSelected() {
+	if (notes_done || notes_busy) return;
+	notes_busy = true;
+	const generation = load_generation;
+	setTimeout(() => {
+		lookForNews(generation)
+			.catch((error) => complain('could not show what\'s new', error))
+			.finally(() => { notes_busy = false; });
+	}, NOTES_DELAY_MS);
+}
+
+// The What's new button: the latest notes of EmbodyTools and every team tool, any time.
+async function showLatestNotes() {
+	const [own, team_notes] = await Promise.all([fetchOwnNotes(), fetchTeamNotes()]);
+	const groups = [];
+	const current = own.filter((entry) => compareVersions(entry.version, PLUGIN_VERSION) <= 0);
+	if (current.length) groups.push({ id: OWN_NOTES_ID, name: 'EmbodyTools', entries: current.slice(0, 1), more: 0 });
+	if (team_notes) {
+		const enabled = readEnabled();
+		for (const descriptor of team.list) {
+			const entries = team_notes.get(descriptor.id);
+			if (entries && entries.length) {
+				groups.push({ id: descriptor.id, name: descriptor.name || descriptor.id, entries: entries.slice(0, 1), more: 0, off: !enabled.has(descriptor.id) });
+			}
+		}
+	}
+	if (!groups.length) {
+		Blockbench.showQuickMessage(team.state === 'online' ? 'No release notes to show yet' : 'Sign in to see the team tools\' release notes');
+		return null;
+	}
+	return showNotesDialog(groups, () => markNotesSeen(groups));
+}
+
+// ===========================================================================
 // ===== THE CARD BROWSER ====================================================
 // ===========================================================================
 
@@ -3127,6 +3466,21 @@ const BROWSER_CSS = `
 .et-page { padding: 14px 0 4px 0; }
 .et-page .et-grid { max-height: none; }
 #et_page_tab { cursor: pointer; }
+
+/* What's new, after an update. */
+.et-notes { max-height: 62vh; overflow-y: auto; padding: 4px 4px 12px 4px; }
+.et-notes-tool { margin-bottom: 18px; }
+.et-notes-tool h2 { font-size: 17px; margin: 0 0 6px 0; display: flex; align-items: center; gap: 8px; }
+.et-notes-tool h3 { font-size: 14px; margin: 12px 0 4px 0; color: var(--color-text); }
+.et-notes-tool h4 { font-size: 12px; margin: 8px 0 2px 0; color: var(--color-subtle_text); text-transform: uppercase; letter-spacing: .04em; }
+.et-notes-tool h4.et-notes-how { color: var(--color-accent); }
+.et-notes-tool ul { margin: 0 0 0 18px; padding: 0; }
+.et-notes-tool li { margin: 2px 0; line-height: 1.45; }
+.et-notes-note { margin: 2px 0 6px 0; font-size: 12px; color: var(--color-subtle_text); }
+.et-notes-badge {
+	font-size: 11px; padding: 1px 7px; border-radius: 9px;
+	background: var(--color-accent); color: var(--color-accent_text);
+}
 `;
 
 /*
@@ -3293,8 +3647,16 @@ function buildCardPanel(options) {
 	add.className = 'et-refresh et-add';
 	add.textContent = 'Add tool';
 	add.title = 'Add a plugin by its link, on this computer';
+	const news = document.createElement('button');
+	news.className = 'et-refresh et-news';
+	news.textContent = 'What\'s new';
+	news.title = 'The latest release notes of EmbodyTools and every team tool';
+	news.addEventListener('click', () => {
+		showLatestNotes().catch((error) => complain('could not show the release notes', error));
+	});
 	bar.appendChild(search);
 	bar.appendChild(add);
+	bar.appendChild(news);
 	bar.appendChild(refresh);
 
 	const grid = document.createElement('div');
@@ -3683,6 +4045,9 @@ registrar.register(PLUGIN_ID, {
 		// Same call Gradient Map Layer uses, which is known to work in this Blockbench.
 		loader.ctx.menuBar(action, 'tools');
 
+		// What's new, at the first model opened or made after an update.
+		loader.ctx.on('select_project', onProjectSelected);
+
 		// Deferred so that the plugin list has settled and a slow network does not hold up
 		// Blockbench's own startup.
 		/*
@@ -3744,6 +4109,9 @@ registrar.register(PLUGIN_ID, {
 			if (!current()) return;
 			registerModuleSettings();
 			await loadEnabledTeamTools();
+			// A model already open, as when EmbodyTools is switched on mid-session, counts as
+			// opened now.
+			if (current() && typeof Project !== 'undefined' && Project) onProjectSelected();
 		}, 0);
 	},
 

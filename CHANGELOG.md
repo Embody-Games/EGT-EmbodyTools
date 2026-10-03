@@ -2,6 +2,19 @@
 
 Generated from `changelog.json` by `scripts/changelog.mjs`. Edit that file, not this one.
 
+## v3.1.0 - What's new, after every update
+
+_2026-10-03_
+
+### How to use
+
+- Open or make a model after an update to see what changed, or press What's new above the cards.
+
+### Added
+
+- A What's new window: the first model you open after an update shows what changed in EmbodyTools and in the team tools since you last looked, with how to use it.
+- A What's new button above the cards, with the latest notes of every tool.
+
 ## v3.0.1 - A branch picker, and your plugins stay put
 
 _2026-10-03_

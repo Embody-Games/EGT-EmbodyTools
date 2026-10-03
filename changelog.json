@@ -1,4 +1,24 @@
 {
+	"3.1.0": {
+		"title": "What's new, after every update",
+		"author": "Embody Games",
+		"date": "2026-10-03",
+		"categories": [
+			{
+				"title": "How to use",
+				"list": [
+					"Open or make a model after an update to see what changed, or press What's new above the cards."
+				]
+			},
+			{
+				"title": "Added",
+				"list": [
+					"A What's new window: the first model you open after an update shows what changed in EmbodyTools and in the team tools since you last looked, with how to use it.",
+					"A What's new button above the cards, with the latest notes of every tool."
+				]
+			}
+		]
+	},
 	"3.0.1": {
 		"title": "A branch picker, and your plugins stay put",
 		"author": "Embody Games",
