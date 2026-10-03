@@ -25,6 +25,7 @@ EmbodyTools never removes anything from your plugin list. A team tool you instal
 - Blockbench asks permission once each for the four things the sign-in needs: listening on this computer for Google's answer, opening your browser, file access, and your computer's own credential storage, which keeps your sign-in encrypted. That's Windows' own on Windows, the Keychain on a Mac, and your desktop's keyring on Linux. A Linux desktop with no keyring gets a key file that only your account can read instead.
 - The team's tools are checked against your account when Blockbench starts and every 15 minutes. They keep an encrypted offline copy, which works for up to a week without a connection.
 - Signing out removes the team's tools, their offline copies and the saved sign-in. So does the end of your access.
+- Each team tool's card has a branch picker next to its switch: the tool's default branch first, then the other branches of its repo, for trying work in progress. The pick is for this computer only, and needs a connection.
 
 ## Outside tools
 
