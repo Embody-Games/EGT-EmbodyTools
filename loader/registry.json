@@ -9,6 +9,30 @@
       "description": "Wynncraft model tools: embed and validate textures, clean up a model for Wynncraft, and set texture drivers, billboard pivots, block and sky brightness and skin shaders. Adds the Wynncraft Actor format.",
       "tags": ["Wynncraft"],
       "url": "https://s3.jared.im/persist/wynncraft_content_tools.js"
+    },
+    {
+      "id": "preview_scene_customiser",
+      "name": "Preview Scene Customiser",
+      "author": "Ewan Howell",
+      "description": "Create your own preview scenes, download scenes from the Preview Scene Store, and edit and manage existing ones.",
+      "tags": ["Preview Scenes"],
+      "url": "https://raw.githubusercontent.com/JannisX11/blockbench-plugins/master/plugins/preview_scene_customiser/preview_scene_customiser.js"
+    },
+    {
+      "id": "geckolib",
+      "name": "GeckoLib Models & Animations",
+      "author": "Eliot Lash, Tslat, Gecko, McHorse",
+      "description": "Create animated blocks, items, entities and armour for the GeckoLib mod library for Minecraft: Java Edition, and export their models and animations.",
+      "tags": ["Minecraft: Java Edition", "Animation"],
+      "url": "https://raw.githubusercontent.com/JannisX11/blockbench-plugins/master/plugins/geckolib/geckolib.js"
+    },
+    {
+      "id": "shape_generator",
+      "name": "Shape Generator",
+      "author": "dragonmaster95",
+      "description": "Builds octagons and hexadecagons out of rotated cubes, solid or hollow, at the size, centre and axis you set. Filter > Generate shape, in formats that rotate cubes.",
+      "tags": ["Modeling"],
+      "url": "https://raw.githubusercontent.com/JannisX11/blockbench-plugins/master/plugins/shape_generator.js"
     }
   ]
 }
