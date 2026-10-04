@@ -48,7 +48,7 @@ const PLUGIN_ID = 'embodytools';
 // Bumped on every deploy during testing, so the plugin page shows at a glance whether the
 // running copy is the latest file. If the page does not say this number, Blockbench is
 // reading some other file.
-const PLUGIN_VERSION = '3.2.0';
+const PLUGIN_VERSION = '3.3.0';
 const TAG = '[embodytools]';
 
 /*
@@ -949,6 +949,8 @@ function adaptPlugin(registration, descriptor) {
 		author: definition.author,
 		variant: definition.variant,
 		min_version: definition.min_version,
+		// Its own icon, for its row (ownIcon).
+		icon: definition.icon,
 		load: function (ctx) {
 			// Recorded first, so it runs after the plugin's own onunload: the event listeners and
 			// styles its onload added that its onunload left in place (onloadAdditions).
@@ -1123,6 +1125,8 @@ async function loadModule(descriptor) {
 		const bar_items_before = new Set(barItemIds());
 		const module = evaluateModule(fetched.source, created.ctx, effective);
 		entry.module = module;
+		// Kept for its row while it's off, from now on (ownIcon).
+		rememberIcon(descriptor.id, module.icon);
 
 		if (module.kind === 'plugin') {
 			// Recorded first so it runs last, after the plugin's own onunload has had its go.
@@ -3505,6 +3509,135 @@ function toolIcon(descriptor) {
 }
 
 /*
+ * Each tool's own icon, the one it gives Blockbench, shown in its row in place of the line
+ * icon (David, 2026-10-04): a picture, as a data: URL or a .png or .svg file next to an outside
+ * tool's own file, or the name of an icon Blockbench draws itself (Material, Font Awesome or
+ * Blockbench's own), drawn by Blockbench.getIconNode as Blockbench draws a plugin's. It comes
+ * from the first of these that knows it:
+ *  - the tool running here: what it registered (adaptPlugin);
+ *  - the last time it ran on this computer (ICONS_KEY), so a tool that's off keeps it;
+ *  - for an outside tool from Blockbench's own plugin repo, that store's entry for it, which
+ *    Blockbench reads at start before it loads any plugin (storeIcon).
+ * A team tool that hasn't run on this computer yet, and any tool that gives none, keeps its line
+ * icon. Nothing a tool gives is ever HTML here: a picture goes in an img's src and a name through
+ * getIconNode, and only once cleanIcon has taken it.
+ */
+const ICONS_KEY = 'embodytools.tool_icons';
+const ICON_PICTURE = /^data:image\/(?:png|jpeg|gif|webp|svg\+xml)[;,]/;
+const ICON_PICTURE_MAX = 200000;
+const ICON_FILE = /^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,79}\.(?:png|svg)$/;
+const ICON_NAME = /^(?:[a-z0-9_]{1,64}|(?:fa[rsb]\.)?fa-[a-z0-9-]{1,64}|icon-[a-z0-9_-]{1,64})$/;
+// Blockbench's plain plugin piece says nothing about a tool, so the line icon stays for it.
+const NO_OWN_ICON = new Set(['', 'extension']);
+// Where Blockbench's own plugin store keeps its plugins' files, directly or through its CDN.
+const STORE_FILES = /^https:\/\/(?:raw\.githubusercontent\.com\/JannisX11\/blockbench-plugins\/|cdn\.jsdelivr\.net\/gh\/JannisX11\/blockbench-plugins[@/])/;
+// Pictures that didn't load this session, offline or gone, so a redraw doesn't ask again.
+const broken_icons = new Set();
+let saved_icons = null;
+
+function cleanIcon(icon) {
+	if (typeof icon !== 'string' || NO_OWN_ICON.has(icon)) return null;
+	if (ICON_PICTURE.test(icon)) return icon.length <= ICON_PICTURE_MAX ? icon : null;
+	return ICON_FILE.test(icon) || ICON_NAME.test(icon) ? icon : null;
+}
+
+function savedIcons() {
+	if (!saved_icons) {
+		try {
+			const saved = JSON.parse(localStorage.getItem(ICONS_KEY) || '{}');
+			saved_icons = saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {};
+		} catch (error) {
+			saved_icons = {};
+		}
+	}
+	return saved_icons;
+}
+
+const savedIcon = (id) => (Object.prototype.hasOwnProperty.call(savedIcons(), id) ? cleanIcon(savedIcons()[id]) : null);
+
+// What a tool registered, kept for when it's off. One that registers none forgets the old one.
+function rememberIcon(id, icon) {
+	if (typeof id !== 'string' || id === '__proto__') return;
+	const clean = cleanIcon(icon);
+	if (savedIcon(id) === clean) return;
+	const saved = savedIcons();
+	if (clean) saved[id] = clean;
+	else delete saved[id];
+	try {
+		localStorage.setItem(ICONS_KEY, JSON.stringify(saved));
+	} catch (error) {
+		grumble('could not remember the icon of ' + id, error);
+	}
+}
+
+// An icon file sits next to the tool's own file: only for a tool from an https link, and only on
+// that host. A team tool's repo is private, so a team tool's picture has to be a data: URL.
+function iconFileUrl(file, descriptor) {
+	if (descriptor.team || typeof descriptor.url !== 'string' || !/^https:\/\//i.test(descriptor.url)) return null;
+	try {
+		const base = new URL(descriptor.url);
+		const url = new URL(file, base);
+		return url.protocol === 'https:' && url.host === base.host ? url.href : null;
+	} catch (error) {
+		return null;
+	}
+}
+
+// An outside tool from Blockbench's own plugin repo, before it has run here: the icon in
+// Blockbench's store list (Plugins.json), which Blockbench reads before it loads any plugin.
+function storeIcon(descriptor) {
+	if (descriptor.team || typeof descriptor.url !== 'string' || !STORE_FILES.test(descriptor.url)) return null;
+	const list = typeof Plugins !== 'undefined' && Plugins ? Plugins.json : null;
+	if (!list || typeof list !== 'object' || !Object.prototype.hasOwnProperty.call(list, descriptor.id)) return null;
+	const listed = list[descriptor.id];
+	return listed && typeof listed === 'object' ? cleanIcon(listed.icon) : null;
+}
+
+// A tool's own icon as { picture } (an img's src) or { name } (for getIconNode), or null for its
+// line icon.
+function ownIcon(descriptor) {
+	const entry = live.get(descriptor.id);
+	const icon = (entry && entry.module ? cleanIcon(entry.module.icon) : null) || savedIcon(descriptor.id) || storeIcon(descriptor);
+	if (!icon) return null;
+	const picture = ICON_FILE.test(icon) ? iconFileUrl(icon, descriptor) : ICON_PICTURE.test(icon) ? icon : null;
+	if (picture) return broken_icons.has(picture) ? null : { picture: picture };
+	return ICON_NAME.test(icon) ? { name: icon } : null;
+}
+
+// The tool's own icon for its tile, or null. A picture that won't load puts back what `fallback`
+// draws there, and isn't asked for again this session.
+function ownIconNode(descriptor, fallback) {
+	const icon = ownIcon(descriptor);
+	if (!icon) return null;
+	if (icon.picture) {
+		const img = document.createElement('img');
+		img.className = 'et-own-icon';
+		img.alt = '';
+		img.draggable = false;
+		img.decoding = 'async';
+		img.referrerPolicy = 'no-referrer';
+		img.addEventListener('load', () => {
+			// Pixel art smaller than the tile stays sharp when it's drawn larger.
+			if (img.naturalWidth && img.naturalWidth < 32) img.classList.add('et-pixelated');
+		});
+		img.addEventListener('error', () => {
+			broken_icons.add(icon.picture);
+			if (img.parentNode) fallback(img.parentNode);
+		});
+		img.src = icon.picture;
+		return img;
+	}
+	if (typeof Blockbench === 'undefined' || !Blockbench || typeof Blockbench.getIconNode !== 'function') return null;
+	try {
+		const node = Blockbench.getIconNode(icon.name);
+		node.classList.add('et-own-icon');
+		return node;
+	} catch (error) {
+		return null;
+	}
+}
+
+/*
  * What a branch is, for its icon: the tool's default branch ('main'), any other branch or build
  * ('branch'), or the tag or commit its entry in team-tools.json is pinned to ('pinned'). The
  * service lists no branches for a pinned tool and gives the pin as its default. A list it
@@ -3772,12 +3905,24 @@ const BROWSER_CSS = `
 .et-row.et-expanded .et-line2 { white-space: normal; overflow: visible; }
 .et-row.et-busy { opacity: .6; }
 .et-tile {
-	display: grid; place-items: center; width: 32px; height: 32px; border-radius: 8px;
+	display: grid; place-items: center; width: 32px; height: 32px; border-radius: 8px; overflow: hidden;
 	background: var(--color-ui); color: var(--et-muted); font-size: 14px; font-weight: 700; text-transform: uppercase;
 }
 .et-row.et-is-on .et-tile { background: var(--color-button); color: var(--color-light); }
 .et-row.et-locked .et-tile, .et-row.et-locked .et-name { opacity: .7; }
 .et-tile .et-svg { width: 18px; height: 18px; }
+/*
+ * A tool's own icon (ownIconNode): a picture takes the whole tile with no box behind it, as
+ * Blockbench shows a plugin's picture; one Blockbench draws sits in the box like a line icon.
+ */
+.et-row .et-tile.et-has-picture, .et-row.et-is-on .et-tile.et-has-picture { background: none; }
+.et-tile img.et-own-icon { display: block; width: 100%; height: 100%; object-fit: contain; }
+.et-tile img.et-own-icon.et-pixelated { image-rendering: pixelated; }
+.et-tile .et-own-icon:not(img) {
+	width: auto; max-width: none; height: auto; margin: 0; padding: 0;
+	font-size: 20px; line-height: 1; text-transform: none; color: inherit;
+}
+.et-tile .fa_big.et-own-icon { font-size: 17px; }
 .et-main { min-width: 0; }
 .et-line1 { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 8px; }
 .et-name { font-size: 13.5px; font-weight: 600; color: var(--color-text); }
@@ -4437,9 +4582,21 @@ function buildCardPanel(options) {
 
 		const tile = element('div', 'et-tile');
 		tile.setAttribute('aria-hidden', 'true');
-		const icon = toolIcon(descriptor);
-		if (icon) tile.appendChild(svgIcon(icon));
-		else tile.textContent = String(name)[0] || '?';
+		// Its own icon (ownIcon), or else the line icon, or else its first letter.
+		const lineIcon = (into) => {
+			into.textContent = '';
+			into.classList.remove('et-has-picture');
+			const icon = toolIcon(descriptor);
+			if (icon) into.appendChild(svgIcon(icon));
+			else into.textContent = String(name)[0] || '?';
+		};
+		const own = ownIconNode(descriptor, lineIcon);
+		if (own) {
+			if (own.tagName === 'IMG') tile.classList.add('et-has-picture');
+			tile.appendChild(own);
+		} else {
+			lineIcon(tile);
+		}
 
 		const main = element('div', 'et-main');
 		const line1 = element('div', 'et-line1');

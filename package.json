@@ -1,6 +1,6 @@
 {
   "name": "egt-embodytools",
-  "version": "3.2.0",
+  "version": "3.3.0",
   "private": true,
   "description": "EmbodyTools, Embody Games' Blockbench plugin: the team's tools for a signed-in Embody account and outside tools from their own links, each switched on and off as a card",
   "author": "Embody Games",

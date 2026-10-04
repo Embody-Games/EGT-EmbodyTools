@@ -2,6 +2,15 @@
 
 Generated from `changelog.json` by `scripts/changelog.mjs`. Edit that file, not this one.
 
+## v3.3.0 - Each tool's own icon
+
+_2026-10-04_
+
+### Changed
+
+- Each tool in the list shows its own icon, the one it has in Blockbench's plugin list. The team tools have new ones, in one style.
+- A tool shows its icon once it has run on your computer. The tools from Blockbench's store show theirs straight away.
+
 ## v3.2.0 - A new Tools tab, and four more tools
 
 _2026-10-03_
