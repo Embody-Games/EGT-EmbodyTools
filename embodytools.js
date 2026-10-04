@@ -48,7 +48,7 @@ const PLUGIN_ID = 'embodytools';
 // Bumped on every deploy during testing, so the plugin page shows at a glance whether the
 // running copy is the latest file. If the page does not say this number, Blockbench is
 // reading some other file.
-const PLUGIN_VERSION = '3.1.0';
+const PLUGIN_VERSION = '3.2.0';
 const TAG = '[embodytools]';
 
 /*
@@ -897,12 +897,18 @@ function evaluateModule(source, ctx, descriptor) {
 		};
 	}
 
+	// Blockbench asks the person in EmbodyTools' name, so each request says which tool it's for,
+	// unless the tool says why itself.
+	const tool_name = (descriptor && (descriptor.name || descriptor.id)) || 'a tool';
+	const handed = (native && typeof requireNativeModule === 'function')
+		? function (module_name, options) {
+			return requireNativeModule(module_name, Object.assign({ message: 'For ' + tool_name + ', a tool EmbodyTools runs' }, options || {}));
+		}
+		: undefined;
 	let result;
 	try {
 		const factory = new NativeFunction('ctx', 'requireNativeModule', 'require', source);
-		result = factory(ctx,
-			(native && typeof requireNativeModule === 'function') ? requireNativeModule : undefined,
-			(native && typeof require === 'function') ? require : undefined);
+		result = factory(ctx, handed, (native && typeof require === 'function') ? handed : undefined);
 	} finally {
 		holders.forEach((holder, index) => { holder.register = originals[index]; });
 	}
@@ -944,14 +950,75 @@ function adaptPlugin(registration, descriptor) {
 		variant: definition.variant,
 		min_version: definition.min_version,
 		load: function (ctx) {
+			// Recorded first, so it runs after the plugin's own onunload: the event listeners and
+			// styles its onload added that its onunload left in place (onloadAdditions).
+			let added = null;
+			ctx.cleanup('what the onload of ' + registration.id + ' left', function () {
+				const removed = added ? removeAdditions(added) : 0;
+				if (removed) grumble(registration.id + ' left ' + removed + ' event listeners or styles behind; removed them');
+			});
 			// Recorded before onload runs, so one that throws halfway still gets its onunload
 			// when the half-loaded tool is torn down, and leaves nothing behind.
 			ctx.cleanup('onunload of ' + registration.id, function () {
 				if (typeof definition.onunload === 'function') definition.onunload.call(definition);
 			});
-			if (typeof definition.onload === 'function') definition.onload.call(definition);
+			const before = onloadBaseline();
+			try {
+				if (typeof definition.onload === 'function') definition.onload.call(definition);
+			} finally {
+				added = onloadAdditions(before);
+			}
 		},
 	};
+}
+
+/*
+ * What a plugin's onload adds to Blockbench's events and the page's styles, so whatever its
+ * onunload leaves can be taken away when it's switched off. Only what was added while onload
+ * itself ran, so nothing of anyone else's is touched. GeckoLib, for one, never removes its
+ * listeners or its style (2026-10-04): every switch off and on again added another set, and
+ * the old ones went on running while it was off.
+ */
+function onloadBaseline() {
+	const events = (typeof Blockbench !== 'undefined' && Blockbench && Blockbench.events) || {};
+	const listeners = new Map();
+	for (const name of Object.keys(events)) {
+		if (Array.isArray(events[name])) listeners.set(name, new Set(events[name]));
+	}
+	const styles = (typeof document !== 'undefined' && document.head) ? new Set(document.head.querySelectorAll('style')) : new Set();
+	return { listeners, styles };
+}
+
+function onloadAdditions(before) {
+	const added = { listeners: [], styles: [] };
+	const events = (typeof Blockbench !== 'undefined' && Blockbench && Blockbench.events) || {};
+	for (const name of Object.keys(events)) {
+		if (!Array.isArray(events[name])) continue;
+		const had = before.listeners.get(name);
+		for (const listener of events[name]) if (!had || !had.has(listener)) added.listeners.push([name, listener]);
+	}
+	if (typeof document !== 'undefined' && document.head) {
+		for (const node of document.head.querySelectorAll('style')) if (!before.styles.has(node)) added.styles.push(node);
+	}
+	return added;
+}
+
+function removeAdditions(added) {
+	let removed = 0;
+	for (const [name, listener] of added.listeners) {
+		const list = Blockbench.events && Blockbench.events[name];
+		if (Array.isArray(list) && list.includes(listener)) {
+			Blockbench.removeListener(name, listener);
+			removed++;
+		}
+	}
+	for (const node of added.styles) {
+		if (node.isConnected) {
+			node.remove();
+			removed++;
+		}
+	}
+	return removed;
 }
 
 /*
@@ -1363,11 +1430,19 @@ let account_epoch = 0;
 // Every Tools tab and dialog currently showing cards, redrawn when anything here changes.
 const panels = new Set();
 
+// The branch list open under a team tool's picker, if one is (openBranchList).
+let branch_list = null;
+
+// The tools whose rows are opened to show more (buildCardPanel), kept through every redraw.
+const expanded_tools = new Set();
+
 function redrawPanels() {
 	for (const panel of Array.from(panels)) {
 		if (panel.element && panel.element.isConnected === false) { panels.delete(panel); continue; }
 		try { panel.draw(); } catch (error) { /* a broken panel must not stop the others */ }
 	}
+	// A panel that went took its pickers with it, so a list open under one goes too.
+	if (branch_list && !branch_list.anchor.isConnected) closeBranchList(false);
 }
 
 function setTeamState(state, detail) {
@@ -2262,29 +2337,35 @@ async function loadBranches() {
 
 /*
  * What a team tool's branch picker shows: the default first, then its other branches, and
- * the picked one even when the list doesn't have it. `value` '' is the default. None at all
- * while there's no list and nothing picked, as before the service has listed the branches.
- * Changing it only makes sense online, with a list to pick from, and while EmbodyTools runs
- * the tool.
+ * the picked one even when the list doesn't have it (`missing`, when there is a list). `value`
+ * '' is the default. Each has the `kind` its icon is picked by (branchKind), and so does the
+ * picker, for the one in use. None at all while there's no list and nothing picked, as before
+ * the service has listed the branches. Changing it only makes sense online, with a list to
+ * pick from, and while EmbodyTools runs the tool.
  */
 function branchPicker(descriptor) {
 	if (!descriptor || !descriptor.team) return null;
 	const info = branch_lists ? branch_lists.get(descriptor.id) : null;
 	const picked = chosenBranch(descriptor.id);
 	if (!info && !picked) return null;
-	const options = [{ value: '', label: info ? info.default : 'default' }];
+	const options = [{ value: '', label: info ? info.default : 'default', kind: branchKind(info, '') }];
 	if (info) {
-		for (const name of info.branches) if (name !== info.default) options.push({ value: name, label: name });
+		for (const name of info.branches) if (name !== info.default) options.push({ value: name, label: name, kind: 'branch' });
 	}
-	if (picked && !options.some((option) => option.value === picked)) options.push({ value: picked, label: picked });
+	if (picked && !options.some((option) => option.value === picked)) {
+		options.push({ value: picked, label: picked, kind: 'branch', missing: !!info });
+	}
 	let title = 'The branch this tool loads from';
 	if (team.state !== 'online') title = 'Branches can be picked while signed in and online';
 	else if (ownCopyLock(descriptor)) title = 'Installed on its own in Blockbench, so that copy runs';
 	else if (!info) title = 'The branches could not be listed. Refresh to try again.';
-	else if (options.length < 2) title = 'This tool has no other branch to pick';
+	else if (options.length < 2) {
+		title = options[0].kind === 'pinned' ? 'Pinned, so everyone stays on ' + options[0].label : 'This tool has no other branch to pick';
+	}
 	return {
 		options,
 		value: picked || '',
+		kind: branchKind(info, picked || ''),
 		enabled: team.state === 'online' && !!info && options.length > 1 && !ownCopyLock(descriptor),
 		title,
 	};
@@ -2742,9 +2823,14 @@ function installedOnItsOwn(id) {
 		&& Plugins.installed.some((record) => record && record.id === id && record.disabled !== true);
 }
 
-// Why a team tool's card can't load EmbodyTools' copy: one installed on its own runs instead.
+/*
+ * Why a tool's row can't load EmbodyTools' copy: one installed on its own runs instead, and
+ * two copies of one plugin can't both run. Outside tools too since 2026-10-04: the ones from
+ * Blockbench's own store (GeckoLib, Preview Scene Customiser, Shape Generator) are often
+ * installed from there already.
+ */
 function ownCopyLock(descriptor) {
-	return descriptor && descriptor.team && installedOnItsOwn(descriptor.id) ? ON_ITS_OWN : null;
+	return descriptor && installedOnItsOwn(descriptor.id) ? ON_ITS_OWN : null;
 }
 
 /*
@@ -3190,6 +3276,8 @@ function markNotesSeen(groups) {
 		}
 	}
 	writeNotesSeen(seen);
+	// The Tools tab's Updated and New tool marks, and its What's new count, go with it.
+	redrawPanels();
 }
 
 const escapeHtml = (text) => String(text).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;' })[c]);
@@ -3335,136 +3423,582 @@ async function showLatestNotes() {
 // ===== THE CARD BROWSER ====================================================
 // ===========================================================================
 
-const BROWSER_CSS = `
-.et-browser { display: flex; flex-direction: column; gap: 14px; min-height: 260px; }
-.et-bar { display: flex; align-items: center; gap: 10px; }
-.et-search {
-	flex: 1; padding: 7px 11px; border-radius: 6px;
-	background: var(--color-back); color: var(--color-text);
-	border: 1px solid var(--color-border); font-size: 13px;
-}
-.et-search:focus { outline: none; border-color: var(--color-accent); }
-.et-refresh {
-	padding: 7px 13px; border-radius: 6px; cursor: pointer; white-space: nowrap;
-	background: var(--color-button); color: var(--color-text);
-	border: 1px solid var(--color-border); font-size: 13px;
-}
-.et-refresh:hover { background: var(--color-selected); }
-.et-add { border-color: var(--color-accent); }
-.et-local { border-style: dashed; }
-.et-local-row { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
-.et-local-label { font-size: 11px; color: var(--color-subtle_text); flex: 1; min-width: 0;
-	overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.et-mini {
-	padding: 2px 8px; border-radius: 4px; cursor: pointer; font-size: 11px;
-	background: var(--color-button); color: var(--color-text); border: 1px solid var(--color-border);
-}
-.et-mini:hover { background: var(--color-selected); }
-.et-mini:disabled { opacity: 0.5; cursor: default; }
-.et-grid {
-	display: grid; gap: 12px; overflow-y: auto; max-height: 62vh; padding: 2px;
-	grid-template-columns: repeat(auto-fill, minmax(268px, 1fr));
-}
-.et-card {
-	display: flex; flex-direction: column; gap: 9px; padding: 14px;
-	background: var(--color-ui); border: 1px solid var(--color-border);
-	border-radius: 9px; transition: border-color .15s ease, transform .15s ease;
-}
-.et-card:hover { border-color: var(--color-accent); transform: translateY(-1px); }
-.et-card.et-on { border-color: var(--color-accent); }
-.et-head { display: flex; align-items: flex-start; gap: 10px; }
-.et-icon {
-	flex: none; width: 34px; height: 34px; border-radius: 8px;
-	display: grid; place-items: center;
-	background: var(--color-accent); color: var(--color-accent_text);
-	font-weight: 700; font-size: 15px; text-transform: uppercase;
-}
-.et-titles { flex: 1; min-width: 0; }
-.et-name {
-	font-weight: 600; font-size: 14px; color: var(--color-text);
-	white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.et-meta { font-size: 11px; color: var(--color-subtle_text); margin-top: 2px; }
-.et-desc {
-	font-size: 12px; line-height: 1.45; color: var(--color-subtle_text);
-	display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
-	overflow: hidden; min-height: 51px;
-}
-.et-tags { display: flex; flex-wrap: wrap; gap: 5px; }
-.et-tag {
-	font-size: 10px; padding: 2px 7px; border-radius: 20px;
-	background: var(--color-back); color: var(--color-subtle_text);
-	border: 1px solid var(--color-border);
-}
-.et-foot {
-	display: flex; align-items: center; justify-content: space-between; gap: 8px;
-	margin-top: auto; padding-top: 9px; border-top: 1px solid var(--color-border);
-}
-.et-status { font-size: 11px; color: var(--color-subtle_text); flex: 1; min-width: 0;
-	overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.et-status.et-bad { color: #e5533d; }
-.et-status.et-good { color: var(--color-accent); }
 /*
- * Every dimension is pinned and the native appearance stripped, because Blockbench
- * styles bare <button> elements inside its own pages (min-width among them). Left to
- * itself this stretched into a long pill while the knob still travelled only 18px, so
- * it never reached the right-hand end.
+ * Line icons, drawn in the text colour: one for each team tool, one per branch type, and the
+ * page's own. They live here, so every tool shows the same set. Fixed strings, never built
+ * from anything a tool, a list or the service sends.
+ */
+const ICON_PATHS = {
+	// The tools.
+	stretch: '<path d="M5 4.5v15"/><path d="M9 12h11"/><path d="M16.5 8.5L20 12l-3.5 3.5"/>',
+	layers: '<path d="M12 4l8 4.2-8 4.2-8-4.2z"/><path d="M4 12.2l8 4.2 8-4.2"/><path d="M4 16l8 4.2 8-4.2"/>',
+	lock: '<rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8.5 10.5V7.5a3.5 3.5 0 0 1 7 0v3"/>',
+	gradient: '<rect x="3.5" y="6.5" width="17" height="11" rx="2"/><path d="M8 6.5v11"/><path d="M12 6.5v11"/><path d="M16 6.5v11"/>',
+	drop: '<path d="M12 4c3 3.6 6 7 6 10.2a6 6 0 0 1-12 0C6 11 9 7.6 12 4z"/>',
+	board: '<rect x="4" y="4" width="16" height="16" rx="2.5"/><path d="M9.5 4v16"/><path d="M15 4v9"/>',
+	sun: '<circle cx="12" cy="12" r="3.5"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8"/>',
+	uv: '<path d="M9 3.5h6v5.5h5.5v6H15v5.5H9V15H3.5V9H9z"/>',
+	cube: '<path d="M12 3.5l7.5 4.2v8.6L12 20.5l-7.5-4.2V7.7z"/><path d="M4.5 7.7L12 12l7.5-4.3"/><path d="M12 12v8.5"/>',
+	globe: '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17"/><path d="M12 3.5c2.5 2.6 2.5 14.4 0 17"/><path d="M12 3.5c-2.5 2.6-2.5 14.4 0 17"/>',
+	brush: '<path d="M16.5 3.5l4 4L9 19H5v-4z"/><path d="M14 6l4 4"/>',
+	scene: '<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M3.5 16l4.5-4.5 4 4 2.5-2.5 6 6"/><circle cx="15.5" cy="9.5" r="1.5"/>',
+	keyframes: '<path d="M7 8.5l3.5 3.5L7 15.5 3.5 12z"/><path d="M17 8.5l3.5 3.5-3.5 3.5-3.5-3.5z"/><path d="M10.5 12h3"/>',
+	octagon: '<path d="M8.6 3.5h6.8l5.1 5.1v6.8l-5.1 5.1H8.6l-5.1-5.1V8.6z"/>',
+	figure: '<rect x="9.5" y="3" width="5" height="5" rx="1"/><rect x="8.5" y="9.5" width="7" height="6.5" rx="1"/><path d="M8.5 11H6v4.5"/><path d="M15.5 11H18v4.5"/><path d="M10.5 16v4.5"/><path d="M13.5 16v4.5"/>',
+	// The branch types: a tool's default branch, any other branch, and a pinned tag or commit.
+	// An outside tool, which loads from its author's link, has no branches and shows `link`.
+	main: '<path d="M12 3v5.5"/><circle cx="12" cy="12" r="3.5"/><path d="M12 15.5V21"/>',
+	branch: '<path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
+	pinned: '<path d="M3.5 12.3V4.5a1 1 0 0 1 1-1h7.8l8.2 8.2-8.8 8.8z"/><circle cx="8.2" cy="8.2" r="1.4"/>',
+	link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.2 1.2"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.2-1.2"/>',
+	// The page.
+	search: '<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>',
+	plus: '<path d="M12 5v14M5 12h14"/>',
+	refresh: '<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4.5v4.5H15"/>',
+	sparkle: '<path d="M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9-1.9 5.1-1.9-5.1-5.1-1.9 5.1-1.9z"/>',
+	shield: '<path d="M12 3.5l7 2.8v5c0 4.4-2.9 7.6-7 9.2-4.1-1.6-7-4.8-7-9.2v-5z"/><path d="M9 12l2.2 2.2L15.5 10"/>',
+	folder: '<path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/>',
+	chevron: '<path d="M6 9l6 6 6-6"/>',
+	cloud: '<path d="M7.5 18.5h9.6a4 4 0 0 0 .3-8 5.5 5.5 0 0 0-10.6-.9A4.5 4.5 0 0 0 7.5 18.5z"/>',
+	saved: '<path d="M12 4.5v9"/><path d="M8 10l4 4 4-4"/><path d="M5 15.5V18a1.5 1.5 0 0 0 1.5 1.5h11A1.5 1.5 0 0 0 19 18v-2.5"/>',
+	copy: '<rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5V6A1.5 1.5 0 0 0 14 4.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5"/>',
+	check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+};
+
+// Each team tool's icon, and the outside tools'. A tool not listed here gets one from its tags.
+const TOOL_ICONS = {
+	anchored_stretch: 'stretch',
+	delta_layers: 'layers',
+	unleakylayers: 'lock',
+	gradient_map_layer: 'gradient',
+	huepainting: 'drop',
+	embody_jira: 'board',
+	dodge_blend_modes: 'sun',
+	easyboxuv: 'uv',
+	adrullanmodel: 'cube',
+	wynncraft_content_tools: 'globe',
+	preview_scene_customiser: 'scene',
+	geckolib: 'keyframes',
+	shape_generator: 'octagon',
+	hytale_plugin: 'figure',
+};
+const TAG_ICONS = [['format', 'cube'], ['uv', 'uv'], ['transform', 'stretch'], ['jira', 'board'], ['workflow', 'board'],
+	['layers', 'layers'], ['color', 'drop'], ['colour', 'drop'], ['paint', 'brush'], ['texturing', 'brush'], ['texture', 'brush']];
+const TOOL_ICON_NAMES = new Set(['stretch', 'layers', 'lock', 'gradient', 'drop', 'board', 'sun', 'uv', 'cube', 'globe', 'brush',
+	'scene', 'keyframes', 'octagon', 'figure']);
+
+function svgIcon(name, className, tag) {
+	const node = document.createElement(tag || 'span');
+	node.className = 'et-svg' + (className ? ' ' + className : '');
+	node.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"'
+		+ ' stroke-linejoin="round" aria-hidden="true" focusable="false">' + (ICON_PATHS[name] || '') + '</svg>';
+	return node;
+}
+
+// A tool's icon: its own, the one an outside list names, or one from its tags. Null for its letter.
+function toolIcon(descriptor) {
+	if (Object.prototype.hasOwnProperty.call(TOOL_ICONS, descriptor.id)) return TOOL_ICONS[descriptor.id];
+	if (TOOL_ICON_NAMES.has(descriptor.icon)) return descriptor.icon;
+	const tags = (descriptor.tags || []).map((tag) => String(tag).toLowerCase());
+	const match = TAG_ICONS.find(([tag]) => tags.includes(tag));
+	return match ? match[1] : null;
+}
+
+/*
+ * What a branch is, for its icon: the tool's default branch ('main'), any other branch or build
+ * ('branch'), or the tag or commit its entry in team-tools.json is pinned to ('pinned'). The
+ * service lists no branches for a pinned tool and gives the pin as its default. A list it
+ * couldn't read is empty too, so then the default's name decides: a version or a commit.
+ */
+const PINNED_REF = /^(?:v?\d+(?:\.\d+)+(?:[-+][0-9A-Za-z.-]+)?|[0-9a-f]{7,40})$/;
+function branchKind(info, value) {
+	if (value) return 'branch';
+	if (info && !info.branches.includes(info.default) && PINNED_REF.test(info.default)) return 'pinned';
+	return 'main';
+}
+
+// The line under a branch in the open picker, what it is, and its tooltip, which says more.
+function branchNote(option) {
+	if (option.kind === 'pinned') return 'Pinned, everyone stays on this version';
+	if (option.kind === 'main') return 'Default, everyone gets this';
+	if (option.missing) return 'Not listed any more';
+	return 'Try changes before they ship';
+}
+
+function branchHint(option) {
+	if (option.kind === 'pinned') return 'The team list holds everyone on ' + option.label;
+	if (option.kind === 'main') return 'Load it from ' + option.label + ', the branch everyone gets';
+	if (option.missing) return 'Picked on this computer before, but the tool\'s repo doesn\'t list it any more';
+	return 'Load it from ' + option.label + ', on this computer only';
+}
+
+// The branch in use, as an opened row says it.
+function branchWhere(option) {
+	if (option.kind === 'pinned') return 'pinned, everyone stays on this version';
+	if (option.kind === 'main') return 'the default, everyone gets this';
+	if (option.missing) return 'picked here, not listed any more';
+	return 'picked on this computer only';
+}
+
+/*
+ * The release notes behind the Tools tab's badges: which tools have something new since What's
+ * new last showed, and each team tool's latest version, shown while it's off. Read the first
+ * time the tab is drawn, again once signed in if it was drawn before that, and on Refresh.
+ * { own, team, state }: own and team as fetchOwnNotes and fetchTeamNotes give them, and the
+ * sign-in state they were read in.
+ */
+let panel_notes = null;
+let panel_notes_loading = null;
+
+function refreshPanelNotes() {
+	if (!panel_notes_loading) {
+		const state = team.state;
+		panel_notes_loading = Promise.all([fetchOwnNotes(), fetchTeamNotes()])
+			.then(([own, team_notes]) => { panel_notes = { own: own, team: team_notes, state: state }; })
+			.catch((error) => {
+				grumble('could not read the release notes for the Tools tab', error && error.message);
+				panel_notes = { own: [], team: null, state: state };
+			})
+			.finally(() => {
+				panel_notes_loading = null;
+				redrawPanels();
+			});
+	}
+	return panel_notes_loading;
+}
+
+// A team tool's latest release notes, for its row: { version, title, date, categories } or null.
+function latestNotes(id) {
+	const entries = panel_notes && panel_notes.team ? panel_notes.team.get(id) : null;
+	return entries && entries.length ? entries[0] : null;
+}
+
+// Its latest version from them, for its row while it isn't running.
+function latestNotedVersion(id) {
+	const latest = latestNotes(id);
+	return latest ? latest.version : '';
+}
+
+/*
+ * What a tool's row shows when it's opened, sorted (David, 2026-10-04: "less a wall of
+ * information"). `chips`, at a glance: whether it runs and which version, a newer release
+ * when there is one, its branch, and where it loads from. `about`, the rest: who made it, its
+ * tags, what it needs, file access said in full, its link (outside tools only; the team's
+ * repos are private) and its id, for saying which tool a problem is with. buildCardPanel draws the
+ * chips on top and the latest release notes beside `about`. Apart from the drawing, so the
+ * harness checks it.
+ */
+const SOURCE_CHIPS = {
+	service: { icon: 'cloud', text: 'Embody service', title: 'Loads from the Embody access service' },
+	'offline copy': { icon: 'saved', text: 'Offline copy', title: 'Runs from the copy saved on this computer, while offline' },
+	network: { icon: 'link', text: 'Author\'s link', title: 'Loads from its author\'s own link' },
+	cache: { icon: 'saved', text: 'Copy from last time', title: 'Its link didn\'t answer, so the copy from last time runs' },
+	'local file': { icon: 'folder', text: 'File on this computer', title: 'Read from a file on this computer' },
+	local: { icon: 'link', text: 'Added on this computer', title: 'Loads from a link added on this computer' },
+};
+const BRANCH_SHORT = { main: 'default', branch: 'this computer only', pinned: 'pinned' };
+const VARIANT_TEXT = { desktop: 'the desktop app', web: 'the web app' };
+const MORE_NOTE_LINES = 4; // of each part of the latest notes, in an opened row
+
+function toolSummary(descriptor) {
+	const entry = live.get(descriptor.id);
+	const module = entry && entry.module;
+	const state = stateOf(descriptor.id);
+	const version = module && module.version ? String(module.version) : '';
+	const chips = [];
+
+	const status = {
+		on: { tone: 'good', text: version ? 'Running ' + version : 'Running' },
+		loading: { tone: '', text: 'Loading' },
+		error: { tone: 'bad', text: 'Failed' },
+		blocked: { tone: 'warn', text: 'Blocked' },
+		locked: { tone: '', icon: 'lock', text: 'Locked' },
+	}[state.status] || { tone: 'off', text: 'Off' };
+	chips.push(Object.assign({ key: 'status', title: state.detail || '' }, status));
+
+	const picker = branchPicker(descriptor);
+	const current = picker ? (picker.options.find((option) => option.value === picker.value) || picker.options[0]) : null;
+	// A newer release than the one running, on the default branch: Refresh loads it.
+	const latest = descriptor.team ? latestNotes(descriptor.id) : null;
+	if (state.status === 'on' && latest && version && (!current || current.kind === 'main')
+		&& compareVersions(latest.version, version) > 0) {
+		chips.push({ key: 'update', icon: 'sparkle', tone: 'new', text: latest.version + ' is out', title: 'Refresh loads it' });
+	}
+	if (current) {
+		chips.push({ key: 'branch', icon: current.kind, tone: current.kind === 'branch' ? 'blue' : '',
+			text: current.label + ' \u00b7 ' + (current.missing ? 'not listed any more' : BRANCH_SHORT[current.kind]),
+			title: branchHint(current) });
+	}
+	let source = SOURCE_CHIPS[state.origin];
+	if (descriptor.local && (!source || state.origin === 'network')) source = SOURCE_CHIPS.local;
+	if (!source) source = descriptor.team ? SOURCE_CHIPS.service : SOURCE_CHIPS.network;
+	chips.push(Object.assign({ key: 'source', tone: '' }, source));
+
+	const about = [];
+	const add = (label, value, kind) => { if (value && value.length) about.push({ label, value, kind: kind || 'text' }); };
+	add('Made by', descriptor.author || (module && module.author) || '');
+	add('Tags', (descriptor.tags || []).map(String), 'tags');
+	add('Needs', [module && module.min_version ? 'Blockbench ' + module.min_version + ' or newer' : '',
+		module && VARIANT_TEXT[module.variant] ? VARIANT_TEXT[module.variant] + ' only' : ''].filter(Boolean).join(', '));
+	// The row's own File access mark, said in full.
+	if (descriptor.native === true) add('File access', 'Can read and write files on this computer');
+	if (!descriptor.team && descriptor.url) add('Link', descriptor.url, 'link');
+	add('Tool id', descriptor.id, 'code');
+	return { chips, about };
+}
+
+const BROWSER_CSS = `
+/*
+ * The Tools tab and the EmbodyTools dialog. The account and the toolbar sit on top, and under
+ * them every tool is a row, in three groups. Colours come from the Blockbench theme in use.
+ * Blockbench styles bare buttons, inputs and headings in its base layer, and this sheet is in
+ * the plugin layer above it, so anything set here wins, but anything not set here is still
+ * Blockbench's: every button below sets each thing Blockbench's sets.
+ */
+.et-browser, .et-branch-list {
+	--et-muted: color-mix(in srgb, var(--color-subtle_text) 65%, var(--color-text));
+	--et-blue: color-mix(in srgb, var(--color-accent) 40%, var(--color-light));
+	--et-new: #e5c07b;
+	--et-bad: #ff8f7a;
+	--et-good: #7ccf8b;
+}
+.et-browser {
+	display: flex; flex-direction: column; min-height: 0;
+	font-size: 13px; line-height: 1.4; color: var(--color-text);
+}
+.et-top { flex: none; display: flex; flex-direction: column; gap: 12px; }
+.et-scroll { display: flex; flex-direction: column; gap: 18px; min-height: 0; overflow-y: auto; }
+/*
+ * On the plugin page the panel takes what's left under Blockbench's header and tabs, and only
+ * the list scrolls, so the sign-in and the search stay in view however many tools there are.
+ */
+.et-page { flex: 1 1 auto; min-height: 0; overflow: hidden; }
+.et-page .et-top { padding: 14px 24px 12px; border-bottom: 1px solid var(--color-border); }
+.et-page .et-scroll { flex: 1 1 auto; padding: 14px 24px 24px; }
+/* In the dialog, which has its own margins. */
+.et-browser:not(.et-page) { gap: 12px; }
+.et-browser:not(.et-page) .et-scroll { max-height: 62vh; padding: 2px 4px 4px 2px; }
+
+/* Line icons, in the text colour. */
+.et-svg { display: inline-flex; flex: none; width: 16px; height: 16px; }
+.et-svg svg { display: block; width: 100%; height: 100%; }
+
+/* The account. */
+.et-account {
+	display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 9px 12px;
+	border-radius: 10px; background: var(--color-back); border: 1px solid var(--color-border);
+}
+.et-account-bad { border-color: var(--et-bad); }
+.et-avatar {
+	flex: none; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%;
+	background: var(--color-button); color: var(--color-light); font-size: 12.5px; font-weight: 600;
+}
+.et-avatar .et-svg { width: 17px; height: 17px; color: var(--et-muted); }
+.et-account-text { flex: 1 1 240px; min-width: 0; }
+.et-account-title { font-size: 13px; color: var(--color-light); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.et-account-title b { font-weight: 600; }
+.et-account-email { margin-left: 6px; color: var(--et-muted); }
+.et-account-sub { display: flex; align-items: center; gap: 5px; margin-top: 1px; font-size: 12px; color: var(--et-muted); }
+.et-account-sub .et-svg { width: 13px; height: 13px; color: var(--color-accent); }
+
+/* Buttons. */
+.et-btn {
+	display: inline-flex; align-items: center; justify-content: center; gap: 7px; flex: none;
+	height: 32px; min-height: 32px; width: auto; min-width: 0; margin: 0; padding: 0 12px; box-sizing: border-box;
+	border-radius: 8px; border: 1px solid var(--color-button); box-shadow: none;
+	background: color-mix(in srgb, var(--color-button) 60%, var(--color-ui)); color: var(--color-text);
+	font-size: 13px; font-weight: normal; line-height: 1; white-space: nowrap; text-decoration: none; cursor: pointer;
+}
+.et-btn:hover { background: var(--color-button); color: var(--color-light); }
+.et-btn:focus { text-decoration: none; }
+.et-btn:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 1px; }
+.et-btn:disabled { opacity: .5; cursor: default; }
+.et-btn .et-svg { width: 15px; height: 15px; }
+.et-btn-primary, .et-btn-primary:hover { background: var(--color-accent); border-color: var(--color-accent); color: var(--color-accent_text); }
+.et-btn-primary:hover { filter: brightness(1.08); }
+.et-btn-quiet { background: transparent; }
+.et-btn-small { height: 28px; min-height: 28px; padding: 0 10px; border-radius: 6px; font-size: 12px; }
+.et-btn-icon { width: 32px; padding: 0; }
+.et-news .et-svg { color: var(--et-new); }
+.et-count {
+	display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box;
+	border-radius: 9px; background: var(--et-new); color: #1a1a1a; font-size: 11px; font-weight: 700;
+}
+.et-spin .et-svg { animation: et-spin 0.9s linear infinite; }
+@keyframes et-spin { to { transform: rotate(360deg); } }
+
+/* The toolbar. */
+.et-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.et-search {
+	flex: 1 1 200px; min-width: 0; display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 11px;
+	box-sizing: border-box; border-radius: 8px; background: var(--color-back); border: 1px solid var(--color-border);
+	color: var(--et-muted);
+}
+.et-search:focus-within { border-color: var(--color-accent); }
+.et-search .et-svg { width: 15px; height: 15px; }
+.et-search input {
+	flex: 1; min-width: 0; height: 100%; margin: 0; padding: 0; border: none; background: transparent;
+	color: var(--color-text); font-size: 13px; outline: none;
+}
+.et-search input::placeholder { color: var(--et-muted); opacity: 1; }
+.et-seg {
+	display: inline-flex; flex: none; gap: 2px; padding: 2px; box-sizing: border-box; border-radius: 8px;
+	background: var(--color-back); border: 1px solid var(--color-border);
+}
+.et-seg button {
+	height: 26px; min-height: 26px; width: auto; min-width: 0; margin: 0; padding: 0 10px; box-sizing: border-box;
+	border: none; border-radius: 6px; box-shadow: none; background: transparent; color: var(--et-muted);
+	font-size: 12.5px; font-weight: normal; line-height: 1; text-decoration: none; cursor: pointer;
+}
+.et-seg button:hover { background: transparent; color: var(--color-light); }
+.et-seg button.et-on, .et-seg button.et-on:hover { background: var(--color-button); color: var(--color-light); }
+.et-seg button:focus { text-decoration: none; }
+
+/* The groups and their rows. */
+.et-section { display: flex; flex-direction: column; gap: 8px; }
+.et-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 0 4px; }
+.et-section-title { font-size: 11.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--color-text); }
+.et-section-count { margin-left: 6px; font-weight: normal; letter-spacing: 0; color: var(--et-muted); }
+.et-section-note { font-size: 12px; color: var(--et-muted); }
+.et-list { border-radius: 10px; background: var(--color-back); border: 1px solid var(--color-border); overflow: hidden; }
+.et-row {
+	display: grid; grid-template-columns: 32px minmax(0, 1fr) auto 40px 20px; align-items: center; gap: 10px 12px;
+	min-height: 58px; padding: 9px 10px 9px 12px; box-sizing: border-box; cursor: pointer;
+}
+.et-row + .et-row { border-top: 1px solid var(--color-ui); }
+.et-row:hover { background: color-mix(in srgb, var(--color-button) 22%, transparent); }
+/* Opened: the description or what's wrong in full, then more about the tool (.et-more). */
+.et-row.et-expanded, .et-row.et-expanded:hover { background: color-mix(in srgb, var(--color-button) 16%, transparent); }
+.et-row.et-expanded .et-line2 { white-space: normal; overflow: visible; }
+.et-row.et-busy { opacity: .6; }
+.et-tile {
+	display: grid; place-items: center; width: 32px; height: 32px; border-radius: 8px;
+	background: var(--color-ui); color: var(--et-muted); font-size: 14px; font-weight: 700; text-transform: uppercase;
+}
+.et-row.et-is-on .et-tile { background: var(--color-button); color: var(--color-light); }
+.et-row.et-locked .et-tile, .et-row.et-locked .et-name { opacity: .7; }
+.et-tile .et-svg { width: 18px; height: 18px; }
+.et-main { min-width: 0; }
+.et-line1 { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 8px; }
+.et-name { font-size: 13.5px; font-weight: 600; color: var(--color-text); }
+.et-row.et-is-on .et-name { color: var(--color-light); }
+.et-meta { font-size: 12px; color: var(--et-muted); }
+.et-line2 { margin-top: 2px; font-size: 12px; color: var(--et-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.et-line2 .et-svg { display: inline-block; width: 12px; height: 12px; margin-right: 5px; vertical-align: -2px; }
+.et-line2.et-bad { color: var(--et-bad); }
+.et-line2.et-warn { color: var(--et-new); }
+.et-chip {
+	display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px; box-sizing: border-box;
+	border-radius: 10px; border: 1px solid var(--color-button); background: var(--color-ui); color: var(--et-muted);
+	font-size: 11px; line-height: 1; white-space: nowrap;
+}
+.et-chip .et-svg { width: 12px; height: 12px; }
+.et-chip-new {
+	border-color: color-mix(in srgb, var(--et-new) 40%, transparent);
+	background: color-mix(in srgb, var(--et-new) 14%, transparent); color: var(--et-new);
+}
+
+/*
+ * The branch picker: the branch's icon by type, its name, and a list of the others. Blue when
+ * this computer isn't on the tool's default, and edged in blue while its list is open.
+ */
+.et-branch {
+	justify-self: end; display: inline-flex; align-items: center; gap: 6px;
+	height: 28px; min-height: 28px; width: auto; min-width: 0; max-width: 190px; margin: 0; padding: 0 7px 0 8px;
+	box-sizing: border-box; border-radius: 6px; border: 1px solid var(--color-button); box-shadow: none;
+	background: var(--color-ui); color: var(--et-muted); font-size: 12px; font-weight: normal; line-height: 1;
+	text-decoration: none; cursor: pointer;
+}
+.et-branch:hover { background: var(--color-ui); color: var(--color-light); border-color: var(--color-accent); }
+.et-branch:focus { text-decoration: none; }
+.et-branch:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 1px; }
+.et-branch .et-svg { width: 14px; height: 14px; }
+.et-branch .et-chev { width: 13px; height: 13px; opacity: .8; transition: transform .12s ease; }
+.et-branch-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.et-branch.et-open { border-color: var(--color-accent); color: var(--color-light); }
+.et-branch.et-open .et-chev { transform: rotate(180deg); }
+.et-branch.et-off-default, .et-branch.et-off-default:hover {
+	border-color: var(--color-accent); background: color-mix(in srgb, var(--color-accent) 16%, transparent);
+	color: var(--et-blue);
+}
+.et-branch:disabled { opacity: .55; cursor: default; }
+.et-branch:disabled:hover { color: var(--et-muted); border-color: var(--color-button); }
+.et-branch.et-off-default:disabled:hover { color: var(--et-blue); border-color: var(--color-accent); }
+
+/*
+ * The picker, open: every branch with its type's icon and a line on what it is, the one in use
+ * ticked. It hangs from document.body, above the dialogs as Blockbench's own menus are (those
+ * at z-index 30, dialogs from 21 to 29), so neither the list's scrolling nor a dialog's edge
+ * cuts it off. Its items are buttons, so each sets what Blockbench's bare buttons set.
+ */
+.et-branch-list {
+	position: fixed; z-index: 30; top: 0; left: 0; box-sizing: border-box;
+	display: flex; flex-direction: column; gap: 2px;
+	width: max-content; min-width: 264px; max-width: min(340px, calc(100vw - 16px));
+	max-height: calc(100vh - 16px); overflow-y: auto;
+	margin: 0; padding: 4px; border-radius: 8px;
+	border: 1px solid var(--color-selected);
+	background: color-mix(in srgb, var(--color-button) 55%, var(--color-ui));
+	box-shadow: 0 10px 28px rgba(0, 0, 0, .45);
+	font-size: 13px; line-height: 1.35; color: var(--color-text);
+}
+.et-branch-item {
+	display: flex; align-items: center; gap: 10px; flex: none;
+	width: 100%; min-width: 0; height: auto; min-height: 44px; margin: 0; padding: 6px 10px; box-sizing: border-box;
+	border: none; border-radius: 6px; box-shadow: none; outline: none;
+	background: transparent; color: var(--color-light); text-align: left;
+	font-size: 13px; font-weight: normal; line-height: 1.35; text-decoration: none; cursor: pointer;
+}
+.et-branch-item:hover, .et-branch-item:focus-visible { background: color-mix(in srgb, var(--color-selected) 70%, transparent); color: var(--color-light); }
+.et-branch-item:focus { text-decoration: none; }
+.et-branch-item:focus-visible { box-shadow: inset 0 0 0 1px var(--color-accent); }
+.et-branch-item.et-current, .et-branch-item.et-current:hover { background: var(--color-selected); }
+.et-branch-item > .et-svg { width: 16px; height: 16px; color: var(--color-text); }
+.et-branch-item.et-kind-branch > .et-svg { color: var(--et-blue); }
+.et-branch-item > .et-check { width: 15px; height: 15px; color: var(--et-blue); }
+.et-branch-item-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.et-branch-item-name, .et-branch-item-note { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.et-branch-item-name { font-size: 13px; color: var(--color-light); }
+.et-branch-item-note { font-size: 11.5px; color: var(--et-muted); }
+.et-branch-item:hover .et-branch-item-note, .et-branch-item:focus-visible .et-branch-item-note,
+.et-branch-item.et-current .et-branch-item-note { color: color-mix(in srgb, var(--color-subtle_text) 40%, var(--color-text)); }
+/*
+ * The arrow at a row's end that opens it, as a click anywhere else on the row does: pointing
+ * right while closed and down while open.
+ */
+.et-expand {
+	justify-self: center; display: grid; place-items: center;
+	width: 20px; min-width: 20px; height: 28px; min-height: 28px; margin: 0; padding: 0; box-sizing: border-box;
+	border: none; border-radius: 6px; box-shadow: none; background: transparent; color: var(--et-muted);
+	font-size: 12px; font-weight: normal; line-height: 1; text-decoration: none; cursor: pointer;
+}
+.et-expand:hover, .et-row:hover .et-expand { background: transparent; color: var(--color-light); }
+.et-expand:focus { text-decoration: none; }
+.et-expand:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 1px; }
+.et-expand .et-svg { width: 16px; height: 16px; transform: rotate(-90deg); transition: transform .15s ease; }
+.et-row.et-expanded .et-expand .et-svg { transform: none; }
+
+/*
+ * More about a tool, under its name, in an opened row, sorted: chips at a glance, then the
+ * latest release notes beside an About part, side by side when there's room. Its text can be
+ * selected and copied.
+ */
+.et-more {
+	grid-column: 2 / -1; display: flex; flex-direction: column; gap: 14px;
+	margin: 0 0 3px; padding: 14px 16px 16px; box-sizing: border-box; border-radius: 10px;
+	background: var(--color-ui); border: 1px solid var(--color-border);
+	cursor: auto; user-select: text; -webkit-user-select: text; container-type: inline-size;
+	font-size: 12.5px; line-height: 1.45; color: var(--color-text);
+}
+.et-more.et-reveal { animation: et-reveal .16s ease-out; }
+@keyframes et-reveal { from { opacity: 0; transform: translateY(-4px); } }
+.et-more-text { margin: 0; }
+
+/* At a glance. A dot for the state, or the icon of what the chip is about. */
+.et-more-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.et-pill {
+	display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px 0 8px; box-sizing: border-box;
+	border-radius: 12px; border: 1px solid var(--color-button); background: var(--color-back);
+	color: var(--color-text); font-size: 12px; line-height: 1; white-space: nowrap;
+}
+.et-pill .et-svg { width: 13px; height: 13px; color: var(--et-muted); }
+.et-pill-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--et-muted); }
+.et-pill.et-good .et-pill-dot { background: var(--et-good); box-shadow: 0 0 0 3px color-mix(in srgb, var(--et-good) 18%, transparent); }
+.et-pill.et-bad { border-color: color-mix(in srgb, var(--et-bad) 55%, transparent); color: var(--et-bad); }
+.et-pill.et-bad .et-pill-dot { background: var(--et-bad); }
+.et-pill.et-warn, .et-pill.et-new { border-color: color-mix(in srgb, var(--et-new) 45%, transparent); color: var(--et-new); }
+.et-pill.et-warn .et-pill-dot { background: var(--et-new); }
+.et-pill.et-new .et-svg { color: var(--et-new); }
+.et-pill.et-blue { border-color: var(--color-accent); background: color-mix(in srgb, var(--color-accent) 14%, transparent); color: var(--et-blue); }
+.et-pill.et-blue .et-svg { color: var(--et-blue); }
+
+/* The notes beside the About part, or the About part alone. One above the other when narrow. */
+.et-more-body { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(220px, 1fr); gap: 14px 24px; }
+.et-more-body.et-single { grid-template-columns: minmax(0, 1fr); }
+.et-more-body:not(.et-single) .et-more-about { padding-left: 22px; border-left: 1px solid var(--color-back); }
+@container (max-width: 520px) {
+	.et-more-body { grid-template-columns: minmax(0, 1fr); }
+	.et-more-body:not(.et-single) .et-more-about { padding: 12px 0 0; border-left: none; border-top: 1px solid var(--color-back); }
+}
+.et-more-heading {
+	display: flex; align-items: baseline; gap: 8px; margin-bottom: 7px;
+	font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--et-muted);
+}
+.et-more-heading-note { font-weight: normal; letter-spacing: 0; text-transform: none; }
+.et-more-notes { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.et-more-notes-title { margin-bottom: 2px; font-size: 13px; font-weight: 600; color: var(--color-light); }
+.et-more-notes-cat {
+	margin-top: 6px; font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--et-muted);
+}
+.et-more-notes-cat.et-how { color: var(--et-blue); }
+/* Blockbench's reset layer takes every li's bullet away, so each list here puts it back. */
+.et-more-notes ul { margin: 0 0 0 18px; padding: 0; }
+.et-more-notes li { margin: 1px 0; list-style: disc; }
+.et-more-notes-more { font-size: 12px; color: var(--et-muted); }
+.et-more-about { min-width: 0; }
+.et-about { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: baseline; gap: 6px 14px; }
+/* The thin line between two rows: a grid row of its own across both columns, so the baselines stay put. */
+.et-about-line { grid-column: 1 / -1; height: 1px; background: var(--color-back); }
+.et-about-label { color: var(--et-muted); }
+.et-about-value { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; overflow-wrap: anywhere; }
+.et-about-link { min-width: 0; color: var(--color-text); }
+.et-about-code {
+	padding: 1px 6px; border-radius: 4px; background: var(--color-back); border: 1px solid var(--color-border);
+	font-family: var(--font-code, monospace); font-size: 11.5px; color: var(--color-light);
+}
+.et-tag {
+	display: inline-flex; align-items: center; height: 20px; padding: 0 8px; box-sizing: border-box; border-radius: 10px;
+	background: var(--color-back); border: 1px solid var(--color-button); font-size: 11.5px; line-height: 1; color: var(--color-text);
+}
+.et-copy {
+	display: inline-grid; place-items: center; flex: none;
+	width: 22px; min-width: 22px; height: 22px; min-height: 22px; margin: 0; padding: 0; box-sizing: border-box;
+	border: none; border-radius: 5px; box-shadow: none; background: transparent; color: var(--et-muted);
+	font-size: 12px; font-weight: normal; line-height: 1; text-decoration: none; cursor: pointer;
+}
+.et-copy:hover { background: var(--color-button); color: var(--color-light); }
+.et-copy:focus { text-decoration: none; }
+.et-copy:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 1px; }
+.et-copy .et-svg { width: 13px; height: 13px; }
+.et-own-link { justify-self: end; display: inline-flex; align-items: center; gap: 6px; padding: 0 8px; font-size: 12px; color: var(--et-muted); }
+.et-own-link .et-svg { width: 14px; height: 14px; }
+.et-row-actions { justify-self: end; display: inline-flex; gap: 6px; }
+
+/*
+ * The switch. Every dimension is pinned and the native appearance stripped, because Blockbench
+ * styles bare <button> elements inside its own pages (min-width among them). Left to itself
+ * this stretched into a long pill while the knob still travelled only 18px.
  */
 .et-switch {
-	flex: 0 0 40px; width: 40px; min-width: 40px; max-width: 40px;
+	justify-self: center; flex: 0 0 40px; width: 40px; min-width: 40px; max-width: 40px;
 	height: 22px; min-height: 22px; box-sizing: border-box;
-	border: none; padding: 0; margin: 0; border-radius: 22px;
-	cursor: pointer; position: relative; background: var(--color-border);
+	border: none; padding: 0; margin: 0; border-radius: 22px; box-shadow: none;
+	cursor: pointer; position: relative; background: var(--color-selected);
 	appearance: none; -webkit-appearance: none;
 	transition: background .18s ease;
 }
+.et-switch:hover { background: var(--color-selected); }
 .et-switch[disabled] { opacity: .45; cursor: default; }
-.et-switch.et-switch-on { background: var(--color-accent); }
+.et-switch.et-switch-on, .et-switch.et-switch-on:hover { background: var(--color-accent); }
 .et-knob {
 	position: absolute; top: 3px; left: 3px; width: 16px; height: 16px;
-	box-sizing: border-box; border-radius: 50%; background: #fff;
+	box-sizing: border-box; border-radius: 50%; background: var(--color-text);
 	transition: left .18s ease;
 }
 /* 40 width - 16 knob - 3 inset = 21, so the gap matches the 3px on the other end. */
-.et-switch-on .et-knob { left: 21px; }
-/*
- * The branch picker. Every dimension is pinned, like the switch's: Blockbench gives every
- * <select> a 30px height, its own padding, display: flex and no arrow.
- */
-.et-branch-wrap { position: relative; display: inline-flex; flex: 0 1 auto; min-width: 0; max-width: 128px; }
-.et-branch {
-	display: block; flex: 1 1 auto; width: 100%; min-width: 48px; height: 22px; min-height: 22px;
-	box-sizing: border-box; margin: 0; padding: 0 20px 0 7px; border-radius: 4px;
-	font-size: 11px; line-height: 20px; cursor: pointer; appearance: none; -webkit-appearance: none;
-	background: var(--color-back); color: var(--color-text); border: 1px solid var(--color-border);
-	white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.et-branch:hover { border-color: var(--color-accent); color: var(--color-text); }
-.et-branch:focus { outline: none; border-color: var(--color-accent); text-decoration: none; }
-.et-branch:disabled { opacity: .55; cursor: default; border-color: var(--color-border); }
-.et-branch-arrow {
-	position: absolute; right: 3px; top: 50%; transform: translateY(-50%);
-	font-size: 16px; line-height: 1; pointer-events: none; color: var(--color-subtle_text);
-}
-.et-branch:disabled + .et-branch-arrow { opacity: .55; }
-.et-empty { padding: 34px; text-align: center; color: var(--color-subtle_text); font-size: 13px; }
-.et-foot-note { font-size: 11px; color: var(--color-subtle_text); }
+.et-switch-on .et-knob { left: 21px; background: #fff; }
 
-/* The sign-in row for the team tools, above the search bar. */
-.et-account {
-	display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 8px;
-	background: var(--color-ui); border: 1px solid var(--color-border);
+/* Nothing to show. */
+.et-empty { padding: 28px; text-align: center; color: var(--et-muted); font-size: 13px; }
+.et-add-here {
+	display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 14px 12px 16px;
+	border-radius: 10px; border: 1px dashed var(--color-selected); color: var(--et-muted);
 }
-.et-account-bad { border-color: #e5533d; }
-.et-account-icon { font-size: 18px; color: var(--color-subtle_text); }
-.et-account-text { flex: 1; min-width: 0; font-size: 12px; color: var(--color-text); }
-.et-locked { opacity: .75; }
-.et-locked:hover { transform: none; border-color: var(--color-border); }
-.et-lock { flex: none; font-size: 16px; color: var(--color-subtle_text); }
+.et-add-here > .et-svg { width: 18px; height: 18px; }
+.et-add-here-text { flex: 1 1 240px; min-width: 0; }
+.et-add-here-title { font-size: 13px; color: var(--color-text); }
+.et-add-here-sub { font-size: 12px; color: var(--et-muted); }
 
-/* The same cards, embedded in Blockbench's own plugin page rather than in a dialog. */
-.et-page { padding: 14px 0 4px 0; }
-.et-page .et-grid { max-height: none; }
 #et_page_tab { cursor: pointer; }
 
 /* What's new, after an update. */
@@ -3475,7 +4009,7 @@ const BROWSER_CSS = `
 .et-notes-tool h4 { font-size: 12px; margin: 8px 0 2px 0; color: var(--color-subtle_text); text-transform: uppercase; letter-spacing: .04em; }
 .et-notes-tool h4.et-notes-how { color: var(--color-accent); }
 .et-notes-tool ul { margin: 0 0 0 18px; padding: 0; }
-.et-notes-tool li { margin: 2px 0; line-height: 1.45; }
+.et-notes-tool li { margin: 2px 0; line-height: 1.45; list-style: disc; }
 .et-notes-note { margin: 2px 0 6px 0; font-size: 12px; color: var(--color-subtle_text); }
 .et-notes-badge {
 	font-size: 11px; padding: 1px 7px; border-radius: 9px;
@@ -3555,42 +4089,71 @@ function button(text, className, onClick) {
 	return element;
 }
 
+function element(tag, className, text) {
+	const node = document.createElement(tag);
+	if (className) node.className = className;
+	if (text !== undefined) node.textContent = text;
+	return node;
+}
+
+// Two letters for the avatar: the first and last name's, or the email's first.
+function initials(name, email) {
+	const words = String(name || '').trim().split(/\s+/).filter(Boolean);
+	const letters = words.length > 1 ? words[0][0] + words[words.length - 1][0] : (words[0] || email || '?')[0];
+	return String(letters).toUpperCase();
+}
+
 /*
- * The sign-in row above the cards: who is signed in, or what to do about it. Its buttons
- * redraw every panel through setTeamState, so nothing here needs to.
+ * The account, at the very top: who is signed in, or what to do about it. Its buttons redraw
+ * every panel through setTeamState, so nothing here needs to.
  */
 function buildAccountRow() {
-	const row = document.createElement('div');
-	row.className = 'et-account' + (team.state === 'refused' || team.state === 'expired'
-		|| team.state === 'offline_expired' || team.state === 'vault_error' ? ' et-account-bad' : '');
-	const icon = document.createElement('i');
-	icon.className = 'material-icons et-account-icon';
-	icon.textContent = team.state === 'online' || team.state === 'offline' ? 'verified_user' : 'lock';
-	const text = document.createElement('span');
-	text.className = 'et-account-text';
-	row.appendChild(icon);
+	const row = element('div', 'et-account' + (team.state === 'refused' || team.state === 'expired'
+		|| team.state === 'offline_expired' || team.state === 'vault_error' ? ' et-account-bad' : ''));
+	const signed_in = team.state === 'online' || team.state === 'offline';
+	const avatar = element('div', 'et-avatar');
+	avatar.setAttribute('aria-hidden', 'true');
+	if (signed_in) avatar.textContent = initials(team.name, team.email);
+	else avatar.appendChild(svgIcon('lock'));
+	const text = element('div', 'et-account-text');
+	const title = element('div', 'et-account-title');
+	const sub = element('div', 'et-account-sub');
+	text.appendChild(title);
+	row.appendChild(avatar);
 	row.appendChild(text);
 
 	const add = (label, onClick, primary) => {
-		row.appendChild(button(label, 'et-refresh' + (primary ? ' et-add' : ''), (event) => {
+		row.appendChild(button(label, 'et-btn et-btn-small' + (primary ? ' et-btn-primary' : ' et-btn-quiet'), (event) => {
 			event.currentTarget.disabled = true;
 			Promise.resolve(onClick()).catch((error) => complain(label + ' failed', error)).finally(redrawPanels);
 		}));
 	};
+	const say_sub = (message, icon) => {
+		if (icon) sub.appendChild(svgIcon(icon));
+		sub.appendChild(document.createTextNode(message));
+		text.appendChild(sub);
+	};
 
+	if (signed_in) {
+		const who = element('b', '', team.name && team.name !== team.email ? team.name : team.email);
+		title.appendChild(who);
+		if (team.name && team.name !== team.email) title.appendChild(element('span', 'et-account-email', team.email));
+		title.title = team.email;
+	}
 	switch (team.state) {
 		case 'online':
-			text.textContent = 'Signed in as ' + (team.name && team.name !== team.email ? team.name + ' (' + team.email + ')' : team.email);
+			say_sub('Signed in with Google, so the team tools load', 'shield');
 			add('Sign out', signOut);
 			break;
 		case 'offline':
-			text.textContent = 'Signed in as ' + team.email + '. Offline, so the team tools run from the copies saved on '
-				+ new Date(team.lastCheck).toLocaleDateString() + '.';
+			say_sub('Offline, so the team tools run from the copies saved on '
+				+ new Date(team.lastCheck).toLocaleDateString() + '.');
 			add('Sign out', signOut);
 			break;
 		case 'signing_in':
-			text.textContent = teamMessage();
+			title.textContent = teamMessage();
 			if (team.pendingUrl) {
+				say_sub('Nothing opened? Copy the sign-in link into your browser.');
 				add('Copy sign-in link', () => {
 					const ok = copyText(team.pendingUrl);
 					Blockbench.showQuickMessage(ok ? 'Copied. Open it in your browser.' : 'Could not reach the clipboard', 2500);
@@ -3601,246 +4164,616 @@ function buildAccountRow() {
 		case 'checking':
 		case 'web':
 		case 'no_vault':
-			text.textContent = teamMessage();
+			title.textContent = teamMessage();
 			break;
 		case 'vault_error':
-			text.textContent = teamMessage();
+			title.textContent = teamMessage();
 			add('Try again', retryTeamStartup);
 			break;
 		case 'offline_expired':
-			text.textContent = teamMessage();
+			title.textContent = teamMessage();
 			add('Try again', checkInAndCatchUp);
 			break;
 		case 'refused':
-			text.textContent = teamMessage();
+			title.textContent = teamMessage();
 			add('Sign in with another account', signIn, true);
 			break;
 		default:
-			text.textContent = teamMessage();
+			if (team.state === 'signed_out' && !team.detail) {
+				title.textContent = 'Sign in to use the team tools';
+				say_sub('With your @' + TEAM_DOMAIN + ' Google account.');
+			} else {
+				title.textContent = teamMessage();
+			}
 			add('Sign in with Google', signIn, true);
 	}
+	title.title = title.title || title.textContent;
 	return row;
 }
 
 /*
- * The cards, with search, Add tool and Refresh above them. Used by the plugin page's Tools tab
- * and by the dialog. Every panel is kept in `panels` while it is on screen, so a sign-in, a
- * refusal or a check-in redraws all of them.
+ * A team tool's branch picker, opened: the list from the design David picked on 2026-10-03, each
+ * branch with its type's icon and a line on what it is (branchNote), the one in use ticked.
+ * Drawn here rather than as Blockbench's own menu, which has no room for the line and is light
+ * in the dark theme. One at a time, kept in `branch_list`.
+ *
+ * Arrow keys, Home and End move through it, Enter or a click picks, and Escape or Tab closes it,
+ * as does a press anywhere else, the window changing size, or the tools under it scrolling its
+ * picker out of sight (until then it follows the picker). No key pressed in it reaches
+ * Blockbench, where Enter would confirm the dialog under it and Escape close that.
+ * `onPick` gets the value picked, '' for the default, and only when it's another branch.
+ * Opened again with `reopen` on the same tool's new picker after a redraw (buildCardPanel), the
+ * branch that had the focus keeps it.
+ */
+const branch_openers = new WeakMap();
+
+function branchButton(root, id) {
+	return Array.from(root.querySelectorAll('.et-branch')).find((node) => node.dataset.etBranch === id) || null;
+}
+
+function openBranchList(options) {
+	const { picker, anchor, onPick } = options;
+	let focus_value = picker.value;
+	if (options.reopen && branch_list && branch_list.id === options.id) {
+		const focused = branch_list.items.find((item) => item === document.activeElement);
+		focus_value = focused ? focused.dataset.etValue : null;
+	}
+	closeBranchList(false);
+
+	const node = element('div', 'et-branch-list');
+	node.id = 'et_branch_list';
+	node.setAttribute('role', 'menu');
+	node.setAttribute('aria-label', 'Branches of ' + options.name);
+	const items = picker.options.map((option) => {
+		const current = option.value === picker.value;
+		const item = element('button', 'et-branch-item et-kind-' + option.kind + (current ? ' et-current' : ''));
+		item.type = 'button';
+		item.setAttribute('role', 'menuitemradio');
+		item.setAttribute('aria-checked', current ? 'true' : 'false');
+		item.dataset.etValue = option.value;
+		item.title = branchHint(option);
+		item.appendChild(svgIcon(option.kind));
+		const words = element('span', 'et-branch-item-text');
+		words.appendChild(element('span', 'et-branch-item-name', option.label));
+		words.appendChild(element('span', 'et-branch-item-note', branchNote(option)));
+		item.appendChild(words);
+		if (current) item.appendChild(svgIcon('check', 'et-check'));
+		item.addEventListener('click', () => {
+			closeBranchList(true);
+			if (!current) onPick(option.value);
+		});
+		node.appendChild(item);
+		return item;
+	});
+
+	// Focus an item, scrolling only the list itself when it's too long for the window.
+	const show = (item) => {
+		item.focus({ preventScroll: true });
+		if (item.offsetTop < node.scrollTop) node.scrollTop = item.offsetTop - 4;
+		else if (item.offsetTop + item.offsetHeight > node.scrollTop + node.clientHeight) {
+			node.scrollTop = item.offsetTop + item.offsetHeight - node.clientHeight + 4;
+		}
+	};
+	node.addEventListener('keydown', (event) => {
+		event.stopPropagation();
+		const at = items.indexOf(document.activeElement);
+		const go = (index) => {
+			event.preventDefault();
+			show(items[(index + items.length) % items.length]);
+		};
+		switch (event.key) {
+			case 'ArrowDown': go(at + 1); break;
+			case 'ArrowUp': go(at < 0 ? items.length - 1 : at - 1); break;
+			case 'Home': case 'PageUp': go(0); break;
+			case 'End': case 'PageDown': go(items.length - 1); break;
+			case 'Escape': event.preventDefault(); closeBranchList(true); break;
+			// Back on the picker, so Tab goes on from there.
+			case 'Tab': closeBranchList(true); break;
+			default: break;
+		}
+	});
+
+	const listeners = [];
+	const listen = (target, type, listener, capture) => {
+		target.addEventListener(type, listener, capture);
+		listeners.push([target, type, listener, capture]);
+	};
+	// The picker's own click opens and closes it, so a press on the picker is left to that.
+	listen(document, 'pointerdown', (event) => {
+		if (!node.contains(event.target) && !anchor.contains(event.target)) closeBranchList(false);
+	}, true);
+	// The tools under it scrolling: it follows its picker, and closes once the picker is out of
+	// sight. Closing at any scroll closed it at once when a click came in the middle of one,
+	// as with a trackpad's glide.
+	listen(document, 'scroll', (event) => {
+		if (event.target === node) return;
+		const holder = anchor.closest('.et-scroll');
+		const view = holder ? holder.getBoundingClientRect() : { top: 0, bottom: window.innerHeight };
+		const box = anchor.getBoundingClientRect();
+		if (!anchor.isConnected || box.bottom <= view.top || box.top >= view.bottom) closeBranchList(false);
+		else placeBranchList(node, anchor);
+	}, true);
+	listen(window, 'resize', () => closeBranchList(false), false);
+
+	document.body.appendChild(node);
+	placeBranchList(node, anchor);
+	anchor.classList.add('et-open');
+	anchor.setAttribute('aria-expanded', 'true');
+	anchor.setAttribute('aria-controls', node.id);
+	branch_list = { id: options.id, panel: options.panel, anchor, node, items, listeners };
+
+	if (focus_value !== null) {
+		const target = items.find((item) => item.dataset.etValue === focus_value)
+			|| items.find((item) => item.classList.contains('et-current')) || items[0];
+		if (target) show(target);
+	}
+}
+
+// Under the picker with their right edges lined up, or above it when there's more room there.
+function placeBranchList(node, anchor) {
+	const box = anchor.getBoundingClientRect();
+	const gap = 4;
+	const edge = 8;
+	node.style.maxHeight = '';
+	const width = node.offsetWidth;
+	let height = node.offsetHeight;
+	const below = window.innerHeight - box.bottom - gap - edge;
+	const above = box.top - gap - edge;
+	const down = height <= below || below >= above;
+	const room = down ? below : above;
+	if (height > room) {
+		height = Math.max(room, 88);
+		node.style.maxHeight = height + 'px';
+	}
+	const top = down ? box.bottom + gap : box.top - gap - height;
+	const left = Math.min(box.right - width, window.innerWidth - width - edge);
+	node.style.top = Math.round(Math.max(edge, top)) + 'px';
+	node.style.left = Math.round(Math.max(edge, left)) + 'px';
+}
+
+// Closes the open branch list, if there is one, and puts the focus back on its picker if asked.
+function closeBranchList(refocus) {
+	const open = branch_list;
+	if (!open) return;
+	branch_list = null;
+	for (const [target, type, listener, capture] of open.listeners) target.removeEventListener(type, listener, capture);
+	open.node.remove();
+	open.anchor.classList.remove('et-open');
+	open.anchor.setAttribute('aria-expanded', 'false');
+	if (refocus && open.anchor.isConnected && !open.anchor.disabled) open.anchor.focus({ preventScroll: true });
+}
+
+/*
+ * The Tools tab and the dialog. On top, the account, then search, a filter by on and off, What's
+ * new, Add tool and Refresh. Under them every tool is a row, grouped as the team's, outside
+ * tools, and those added on this computer, and on the plugin page only that list scrolls. A
+ * click on a row opens it to show more, and another closes it (`expanded_tools`, David,
+ * 2026-10-04). Every panel is kept in `panels` while it is on screen, so a sign-in, a refusal
+ * or a check-in redraws all of them, opened rows staying open.
  */
 function buildCardPanel(options) {
 	const in_dialog = !!(options && options.inDialog);
-	const panel = document.createElement('div');
+	const panel = element('div', 'et-browser' + (in_dialog ? '' : ' et-page'));
 	if (!in_dialog) panel.id = 'et_page_panel';
-	panel.className = 'et-browser' + (in_dialog ? '' : ' et-page');
+	// Enter on one of the panel's buttons, or in its search, is for that alone. Blockbench's own
+	// key handler on document would also take it as confirming the dialog the panel is in.
+	panel.addEventListener('keydown', (event) => {
+		if (event.key === 'Enter' && event.target.closest('button, input')) event.stopPropagation();
+	});
 
-	const account = document.createElement('div');
+	const top = element('div', 'et-top');
+	const account = element('div');
+	const bar = element('div', 'et-bar');
 
-	const bar = document.createElement('div');
-	bar.className = 'et-bar';
-	const search = document.createElement('input');
-	search.className = 'et-search';
-	search.placeholder = 'Search tools...';
-	const refresh = document.createElement('button');
-	refresh.className = 'et-refresh';
-	refresh.textContent = 'Refresh';
-	const add = document.createElement('button');
-	add.className = 'et-refresh et-add';
-	add.textContent = 'Add tool';
-	add.title = 'Add a plugin by its link, on this computer';
-	const news = document.createElement('button');
-	news.className = 'et-refresh et-news';
-	news.textContent = 'What\'s new';
+	const search_box = element('div', 'et-search');
+	const search = element('input');
+	search.type = 'search';
+	search.placeholder = 'Search tools';
+	search.setAttribute('aria-label', 'Search tools');
+	search_box.appendChild(svgIcon('search'));
+	search_box.appendChild(search);
+
+	let filter = 'all';
+	const seg = element('div', 'et-seg');
+	seg.setAttribute('role', 'group');
+	seg.setAttribute('aria-label', 'Show');
+	const seg_buttons = {};
+	for (const key of ['all', 'on', 'off']) {
+		const choice = element('button');
+		choice.type = 'button';
+		choice.addEventListener('click', () => {
+			filter = key;
+			draw();
+		});
+		seg_buttons[key] = choice;
+		seg.appendChild(choice);
+	}
+
+	const news = element('button', 'et-btn et-news');
+	news.type = 'button';
 	news.title = 'The latest release notes of EmbodyTools and every team tool';
+	const news_count = element('span', 'et-count');
+	news.appendChild(svgIcon('sparkle'));
+	news.appendChild(document.createTextNode('What\'s new'));
+	news.appendChild(news_count);
 	news.addEventListener('click', () => {
 		showLatestNotes().catch((error) => complain('could not show the release notes', error));
 	});
-	bar.appendChild(search);
-	bar.appendChild(add);
-	bar.appendChild(news);
-	bar.appendChild(refresh);
 
-	const grid = document.createElement('div');
-	grid.className = 'et-grid';
+	const add = element('button', 'et-btn');
+	add.type = 'button';
+	add.title = 'Add a plugin by its link, on this computer';
+	add.appendChild(svgIcon('plus'));
+	add.appendChild(document.createTextNode('Add tool'));
+	add.addEventListener('click', () => openAddToolDialog(() => redrawPanels()));
+
+	const refresh = element('button', 'et-btn et-btn-icon');
+	refresh.type = 'button';
+	refresh.title = 'Refresh: read the tool lists again, and reload the tools that are on';
+	refresh.setAttribute('aria-label', 'Refresh');
+	refresh.appendChild(svgIcon('refresh'));
+
+	bar.appendChild(search_box);
+	bar.appendChild(seg);
+	bar.appendChild(news);
+	bar.appendChild(add);
+	bar.appendChild(refresh);
+	top.appendChild(account);
+	top.appendChild(bar);
+
+	const scroll = element('div', 'et-scroll');
+
+	// One tool's row: its icon, name and what's known about it, its branch, its switch, and the
+	// arrow that opens it to show more.
+	const buildRow = (descriptor, enabled, fresh) => {
+		const entry = live.get(descriptor.id);
+		const module = entry && entry.module;
+		const state = stateOf(descriptor.id);
+		const on = enabled.has(descriptor.id);
+		const locked = state.status === 'locked';
+		const name = (module && module.title) || descriptor.name || descriptor.id;
+
+		const row = element('div', 'et-row' + (state.status === 'on' ? ' et-is-on' : '') + (locked ? ' et-locked' : ''));
+
+		const tile = element('div', 'et-tile');
+		tile.setAttribute('aria-hidden', 'true');
+		const icon = toolIcon(descriptor);
+		if (icon) tile.appendChild(svgIcon(icon));
+		else tile.textContent = String(name)[0] || '?';
+
+		const main = element('div', 'et-main');
+		const line1 = element('div', 'et-line1');
+		line1.appendChild(element('span', 'et-name', name));
+		const version = (module && module.version) || descriptor.version || (descriptor.team ? latestNotedVersion(descriptor.id) : '');
+		const author = descriptor.author || (descriptor.local ? 'Unknown author' : '');
+		const meta = [version, author && author !== 'Embody Games' ? 'by ' + author : ''].filter(Boolean).join(' · ');
+		if (meta) line1.appendChild(element('span', 'et-meta', meta));
+		const chip = (text, extra, iconName, title) => {
+			const node = element('span', 'et-chip' + (extra ? ' ' + extra : ''));
+			if (iconName) node.appendChild(svgIcon(iconName));
+			node.appendChild(document.createTextNode(text));
+			if (title) node.title = title;
+			line1.appendChild(node);
+		};
+		const group = fresh.get(descriptor.id);
+		if (group) chip(group.isNew ? 'New tool' : 'Updated', 'et-chip-new', null, 'What\'s new has its release notes');
+		if (descriptor.native === true) chip('File access', '', 'folder', 'It can read and write files on this computer');
+		if (state.status === 'on' && state.origin === 'offline copy') chip('Offline copy', '', null, 'Running from the copy saved on this computer');
+		if (state.status === 'on' && state.origin === 'cache') chip('Cached copy', '', null, 'Its link could not be reached, so the copy from last time runs');
+
+		const line2 = element('div', 'et-line2');
+		const description = (module && module.description) || descriptor.description || '';
+		const problem = state.status === 'error' ? { text: 'Failed: ' + state.detail, className: 'et-bad' }
+			: state.status === 'blocked' ? { text: state.detail, className: 'et-warn' }
+			: locked ? { text: state.detail, icon: 'lock' }
+			: state.status === 'loading' ? { text: 'Loading...' }
+			: null;
+		if (problem) {
+			if (problem.className) line2.classList.add(problem.className);
+			if (problem.icon) line2.appendChild(svgIcon(problem.icon));
+			line2.appendChild(document.createTextNode(problem.text));
+		} else {
+			line2.textContent = description;
+		}
+		line2.title = problem ? problem.text : description;
+		main.appendChild(line1);
+		if (line2.textContent) main.appendChild(line2);
+
+		const toggle = element('button', 'et-switch' + (on ? ' et-switch-on' : ''));
+		toggle.type = 'button';
+		toggle.disabled = locked;
+		toggle.setAttribute('aria-pressed', on ? 'true' : 'false');
+		toggle.setAttribute('aria-label', name);
+		toggle.title = locked ? state.detail : (on ? 'On. Click to switch it off.' : 'Off. Click to switch it on.');
+		toggle.appendChild(element('span', 'et-knob'));
+		toggle.addEventListener('click', async () => {
+			toggle.disabled = true;
+			row.classList.add('et-busy');
+			try {
+				await setEnabled(descriptor.id, !on);
+			} finally {
+				redrawPanels();
+			}
+		});
+
+		// The middle: a team tool's branch, an outside tool's link, or what to do with one
+		// added on this computer.
+		let side = element('span');
+		if (descriptor.team) {
+			const picker = branchPicker(descriptor);
+			if (picker) {
+				const current = picker.options.find((option) => option.value === picker.value) || picker.options[0];
+				const pickerButton = element('button', 'et-branch' + (picker.value ? ' et-off-default' : ''));
+				pickerButton.type = 'button';
+				pickerButton.title = picker.title;
+				pickerButton.disabled = !picker.enabled;
+				pickerButton.dataset.etBranch = descriptor.id;
+				pickerButton.setAttribute('aria-haspopup', 'menu');
+				pickerButton.setAttribute('aria-expanded', 'false');
+				pickerButton.setAttribute('aria-label', 'Branch for ' + name + ': ' + current.label);
+				pickerButton.appendChild(svgIcon(current.kind));
+				pickerButton.appendChild(element('span', 'et-branch-name', current.label));
+				pickerButton.appendChild(svgIcon('chevron', 'et-chev'));
+				const open = (reopen) => openBranchList({
+					picker, anchor: pickerButton, panel, id: descriptor.id, name, reopen,
+					onPick: async (value) => {
+						pickerButton.disabled = true;
+						toggle.disabled = true;
+						row.classList.add('et-busy');
+						try {
+							await setBranch(descriptor.id, value);
+						} finally {
+							redrawPanels();
+							// The focus went with the old picker, so it goes to the new one.
+							const again = branchButton(panel, descriptor.id);
+							if (again && (!document.activeElement || document.activeElement === document.body)) {
+								again.focus({ preventScroll: true });
+							}
+						}
+					},
+				});
+				branch_openers.set(pickerButton, open);
+				pickerButton.addEventListener('click', () => {
+					if (branch_list && branch_list.anchor === pickerButton) closeBranchList(true);
+					else open(false);
+				});
+				side = pickerButton;
+			}
+		} else if (descriptor.local) {
+			side = element('span', 'et-row-actions');
+			side.appendChild(button('Copy entry', 'et-btn et-btn-small et-btn-quiet', () => {
+				const ok = copyText(registryEntryText(descriptor));
+				Blockbench.showQuickMessage(ok ? 'Copied. Paste it into registry.json to share it.' : 'Could not reach the clipboard', 2500);
+			}));
+			side.lastChild.title = 'Copy this as a registry.json entry, to give it to everyone';
+			side.appendChild(button('Remove', 'et-btn et-btn-small et-btn-quiet', async (event) => {
+				event.currentTarget.disabled = true;
+				await removeLocalTool(descriptor.id);
+				redrawPanels();
+			}));
+		} else {
+			side = element('span', 'et-own-link');
+			side.title = 'Loads from its author\'s own link, so it has no branches to pick';
+			side.appendChild(svgIcon('link'));
+			side.appendChild(document.createTextNode('Own link'));
+		}
+
+		// Opened, a row shows more about the tool under its name, sorted (toolSummary): the
+		// description when the line above says what's wrong instead, the chips at a glance, then
+		// a team tool's latest notes beside the rest of what's known about it.
+		const more_id = 'et_more_' + (in_dialog ? 'dialog_' : 'page_') + descriptor.id;
+		const buildMore = () => {
+			const summary = toolSummary(descriptor);
+			const more = element('div', 'et-more');
+			more.id = more_id;
+			if (problem && description) more.appendChild(element('p', 'et-more-text', description));
+
+			const chips = element('div', 'et-more-chips');
+			for (const chip of summary.chips) {
+				const pill = element('span', 'et-pill' + (chip.tone ? ' et-' + chip.tone : ''));
+				if (chip.icon) pill.appendChild(svgIcon(chip.icon));
+				else pill.appendChild(element('span', 'et-pill-dot'));
+				pill.appendChild(document.createTextNode(chip.text));
+				if (chip.title) pill.title = chip.title;
+				chips.appendChild(pill);
+			}
+			more.appendChild(chips);
+
+			const latest = descriptor.team ? latestNotes(descriptor.id) : null;
+			const body = element('div', 'et-more-body' + (latest ? '' : ' et-single'));
+			if (latest) {
+				const notes = element('section', 'et-more-notes');
+				const heading = element('div', 'et-more-heading', 'What\'s new');
+				if (latest.date) heading.appendChild(element('span', 'et-more-heading-note', latest.date));
+				notes.appendChild(heading);
+				notes.appendChild(element('div', 'et-more-notes-title', latest.version + (latest.title ? ': ' + latest.title : '')));
+				const how = latest.categories.filter((category) => category.title === HOW_TO_USE);
+				for (const category of how.concat(latest.categories.filter((category) => category.title !== HOW_TO_USE))) {
+					notes.appendChild(element('div', 'et-more-notes-cat' + (category.title === HOW_TO_USE ? ' et-how' : ''), category.title));
+					const list = element('ul');
+					for (const line of category.list.slice(0, MORE_NOTE_LINES)) {
+						// Escaped, or made by Blockbench's own pureMarked, as in the What's new window.
+						const item = element('li');
+						item.innerHTML = noteLine(line);
+						list.appendChild(item);
+					}
+					notes.appendChild(list);
+					const rest = category.list.length - MORE_NOTE_LINES;
+					if (rest > 0) notes.appendChild(element('div', 'et-more-notes-more', 'And ' + rest + ' more, in What\'s new'));
+				}
+				body.appendChild(notes);
+			}
+
+			const about = element('section', 'et-more-about');
+			about.appendChild(element('div', 'et-more-heading', 'About'));
+			const rows = element('div', 'et-about');
+			for (const [index, fact] of summary.about.entries()) {
+				if (index) rows.appendChild(element('div', 'et-about-line'));
+				rows.appendChild(element('span', 'et-about-label', fact.label));
+				const cell = element('span', 'et-about-value');
+				if (fact.kind === 'tags') {
+					for (const tag of fact.value) cell.appendChild(element('span', 'et-tag', tag));
+				} else {
+					cell.appendChild(element(fact.kind === 'code' ? 'code' : 'span', fact.kind === 'text' ? '' : 'et-about-' + fact.kind, fact.value));
+					if (fact.kind === 'link' || fact.kind === 'code') {
+						const copy = element('button', 'et-copy');
+						copy.type = 'button';
+						copy.title = 'Copy';
+						copy.setAttribute('aria-label', 'Copy ' + fact.label.toLowerCase());
+						copy.appendChild(svgIcon('copy'));
+						copy.addEventListener('click', () => {
+							const ok = copyText(fact.value);
+							Blockbench.showQuickMessage(ok ? 'Copied' : 'Could not reach the clipboard', 1500);
+						});
+						cell.appendChild(copy);
+					}
+				}
+				rows.appendChild(cell);
+			}
+			about.appendChild(rows);
+			body.appendChild(about);
+			more.appendChild(body);
+			return more;
+		};
+
+		const expand = element('button', 'et-expand');
+		expand.type = 'button';
+		expand.setAttribute('aria-controls', more_id);
+		expand.appendChild(svgIcon('chevron'));
+		const showOpen = (open) => {
+			row.classList.toggle('et-expanded', open);
+			expand.setAttribute('aria-expanded', open ? 'true' : 'false');
+			expand.setAttribute('aria-label', (open ? 'Less about ' : 'More about ') + name);
+			expand.title = open ? 'Show less' : 'Show more';
+		};
+		const toggleMore = () => {
+			const open = !expanded_tools.has(descriptor.id);
+			if (open) expanded_tools.add(descriptor.id);
+			else expanded_tools.delete(descriptor.id);
+			showOpen(open);
+			const shown = row.querySelector(':scope > .et-more');
+			if (shown) shown.remove();
+			if (open) {
+				const more = buildMore();
+				more.classList.add('et-reveal');
+				row.appendChild(more);
+				// Opened near the bottom, the list scrolls to show it, as far as the row's top allows.
+				const holder = row.closest('.et-scroll');
+				if (holder) {
+					const box = row.getBoundingClientRect();
+					const view = holder.getBoundingClientRect();
+					const by = Math.min(box.bottom - view.bottom + 8, box.top - view.top - 8);
+					if (by > 0) holder.scrollTo({ top: holder.scrollTop + by, behavior: 'smooth' });
+				}
+			}
+		};
+		expand.addEventListener('click', toggleMore);
+		// A click anywhere on the row opens or closes it, but not one on its switch, its picker
+		// or another control, nor in what it shows when opened, where text can be selected.
+		row.addEventListener('click', (event) => {
+			if (event.target.closest('button, a, input, select, textarea, label, .et-more')) return;
+			toggleMore();
+		});
+
+		row.appendChild(tile);
+		row.appendChild(main);
+		row.appendChild(side);
+		row.appendChild(toggle);
+		row.appendChild(expand);
+		const opened = expanded_tools.has(descriptor.id);
+		showOpen(opened);
+		if (opened) row.appendChild(buildMore());
+		return row;
+	};
 
 	const draw = () => {
-		// The branch lists, the first time cards are drawn while online.
+		// The branch lists and the release notes, the first time this is drawn while online.
 		if (branch_lists === null && team.state === 'online') {
 			refreshBranches().catch((error) => complain('could not list the branches', error));
 		}
-		account.replaceChildren(buildAccountRow());
-		const query = search.value.trim().toLowerCase();
-		grid.innerHTML = '';
-		const enabled = readEnabled();
-		const shown = registry.filter((d) => !query
-			|| ((d.name || '') + ' ' + (d.description || '') + ' ' + (d.tags || []).join(' '))
-				.toLowerCase().includes(query));
-		if (!shown.length) {
-			const empty = document.createElement('div');
-			empty.className = 'et-empty';
-			empty.textContent = 'Nothing matches that.';
-			grid.appendChild(empty);
-			return;
+		if (!panel_notes_loading && (panel_notes === null
+			|| (panel_notes.team === null && team.state === 'online' && panel_notes.state !== 'online'))) {
+			refreshPanelNotes();
 		}
-		for (const descriptor of shown) {
-			const entry = live.get(descriptor.id);
-			const module = entry && entry.module;
-			const state = stateOf(descriptor.id);
-			const on = enabled.has(descriptor.id);
-			const locked = state.status === 'locked';
+		account.replaceChildren(buildAccountRow());
 
-			const card = document.createElement('div');
-			card.className = 'et-card' + (state.status === 'on' ? ' et-on' : '') + (locked ? ' et-locked' : '');
+		const enabled = readEnabled();
+		const fresh = new Map();
+		if (panel_notes) {
+			for (const group of newNotes(readNotesSeen(), panel_notes.own, panel_notes.team)) fresh.set(group.id, group);
+		}
+		news_count.textContent = String(fresh.size);
+		news_count.style.display = fresh.size ? '' : 'none';
 
-			const head = document.createElement('div');
-			head.className = 'et-head';
-			const icon = document.createElement('div');
-			icon.className = 'et-icon';
-			icon.textContent = ((descriptor.name || descriptor.id)[0] || '?');
-			const titles = document.createElement('div');
-			titles.className = 'et-titles';
-			const name = document.createElement('div');
-			name.className = 'et-name';
-			name.textContent = (module && module.title) || descriptor.name || descriptor.id;
-			const meta = document.createElement('div');
-			meta.className = 'et-meta';
-			const version = (module && module.version) || descriptor.version || '';
-			const author = descriptor.author || (descriptor.local ? 'Unknown author' : 'Embody Games');
-			meta.textContent = author + (version ? ' · v' + version : '');
-			titles.appendChild(name);
-			titles.appendChild(meta);
-			head.appendChild(icon);
-			head.appendChild(titles);
-			if (locked) {
-				const lock = document.createElement('i');
-				lock.className = 'material-icons et-lock';
-				lock.textContent = 'lock';
-				lock.title = state.detail;
-				head.appendChild(lock);
+		const on_count = registry.filter((d) => enabled.has(d.id)).length;
+		const counts = { all: registry.length, on: on_count, off: registry.length - on_count };
+		const labels = { all: 'All', on: 'On', off: 'Off' };
+		for (const key of Object.keys(seg_buttons)) {
+			seg_buttons[key].textContent = labels[key] + ' ' + counts[key];
+			seg_buttons[key].classList.toggle('et-on', filter === key);
+			seg_buttons[key].setAttribute('aria-pressed', filter === key ? 'true' : 'false');
+		}
+
+		const query = search.value.trim().toLowerCase();
+		const matches = (d) => (!query
+			|| ((d.name || '') + ' ' + (d.description || '') + ' ' + (d.tags || []).join(' ')).toLowerCase().includes(query))
+			&& (filter === 'all' || (filter === 'on') === enabled.has(d.id));
+		const groups = [
+			{ key: 'team', title: 'Team tools', tools: registry.filter((d) => d.team) },
+			{ key: 'outside', title: 'Outside tools', tools: registry.filter((d) => !d.team && !d.local) },
+			{ key: 'local', title: 'Added on this computer', tools: registry.filter((d) => d.local) },
+		];
+		const sections = [];
+		for (const group of groups) {
+			const shown = group.tools.filter(matches);
+			const invite = group.key === 'local' && !group.tools.length && !query && filter === 'all';
+			if (!shown.length && !invite) continue;
+			const section = element('section', 'et-section');
+			const head = element('div', 'et-section-head');
+			const heading = element('div', 'et-section-title', group.title);
+			heading.setAttribute('role', 'heading');
+			heading.setAttribute('aria-level', '3');
+			heading.appendChild(element('span', 'et-section-count', String(shown.length)));
+			head.appendChild(heading);
+			if (group.tools.length) {
+				head.appendChild(element('span', 'et-section-note', group.tools.filter((d) => enabled.has(d.id)).length + ' on'));
 			}
-
-			const desc = document.createElement('div');
-			desc.className = 'et-desc';
-			desc.textContent = (module && module.description) || descriptor.description || '';
-
-			const tags = document.createElement('div');
-			tags.className = 'et-tags';
-			for (const tag of (descriptor.tags || [])) {
-				const chip = document.createElement('span');
-				chip.className = 'et-tag';
-				chip.textContent = tag;
-				tags.appendChild(chip);
+			section.appendChild(head);
+			if (shown.length) {
+				const list = element('div', 'et-list');
+				for (const descriptor of shown) list.appendChild(buildRow(descriptor, enabled, fresh));
+				section.appendChild(list);
+			} else {
+				const empty = element('div', 'et-add-here');
+				empty.appendChild(svgIcon('link'));
+				const words = element('div', 'et-add-here-text');
+				words.appendChild(element('div', 'et-add-here-title', 'Nothing added on this computer'));
+				words.appendChild(element('div', 'et-add-here-sub', 'Add tool loads a plugin from its link, on this computer only.'));
+				empty.appendChild(words);
+				const add_here = button('', 'et-btn et-btn-small', () => openAddToolDialog(() => redrawPanels()));
+				add_here.appendChild(svgIcon('plus'));
+				add_here.appendChild(document.createTextNode('Add tool'));
+				empty.appendChild(add_here);
+				section.appendChild(empty);
 			}
+			sections.push(section);
+		}
+		if (!sections.length) sections.push(element('div', 'et-empty', 'Nothing matches that.'));
+		scroll.replaceChildren(...sections);
 
-			const foot = document.createElement('div');
-			foot.className = 'et-foot';
-			const status = document.createElement('span');
-			status.className = 'et-status'
-				+ (state.status === 'error' ? ' et-bad' : (state.status === 'on' ? ' et-good' : ''));
-			status.textContent = state.status === 'error' ? 'failed: ' + state.detail
-				: state.status === 'blocked' || state.status === 'locked' ? state.detail
-				: state.status === 'on' ? (state.origin === 'cache' ? 'on (cached copy)'
-					: state.origin === 'offline copy' ? 'on (offline copy)' : 'on')
-				: state.status === 'loading' ? 'loading...'
-				: 'off';
-			status.title = status.textContent;
-			const toggle = document.createElement('button');
-			toggle.className = 'et-switch' + (on ? ' et-switch-on' : '');
-			toggle.disabled = locked;
-			const knob = document.createElement('span');
-			knob.className = 'et-knob';
-			toggle.appendChild(knob);
-			toggle.addEventListener('click', async () => {
-				toggle.disabled = true;
-				status.textContent = 'working...';
-				try {
-					await setEnabled(descriptor.id, !on);
-				} finally {
-					redrawPanels();
-				}
-			});
-			foot.appendChild(status);
-
-			// A team tool's branch, next to its switch. Blockbench strips every <select> of its
-			// arrow, so it gets one of its own.
-			const picker = branchPicker(descriptor);
-			if (picker) {
-				const wrap = document.createElement('span');
-				wrap.className = 'et-branch-wrap';
-				wrap.title = picker.title;
-				const select = document.createElement('select');
-				select.className = 'et-branch';
-				select.title = picker.title;
-				for (const option of picker.options) {
-					const element = document.createElement('option');
-					element.value = option.value;
-					element.textContent = option.label;
-					select.appendChild(element);
-				}
-				select.value = picker.value;
-				select.disabled = !picker.enabled;
-				select.addEventListener('change', async () => {
-					select.disabled = true;
-					toggle.disabled = true;
-					status.textContent = 'switching...';
-					try {
-						await setBranch(descriptor.id, select.value);
-					} finally {
-						redrawPanels();
-					}
-				});
-				const arrow = document.createElement('i');
-				arrow.className = 'material-icons et-branch-arrow';
-				arrow.textContent = 'expand_more';
-				wrap.appendChild(select);
-				wrap.appendChild(arrow);
-				foot.appendChild(wrap);
-			}
-			foot.appendChild(toggle);
-
-			card.appendChild(head);
-			card.appendChild(desc);
-			if (tags.childNodes.length) card.appendChild(tags);
-
-			if (descriptor.local) {
-				card.classList.add('et-local');
-				const local = document.createElement('div');
-				local.className = 'et-local-row';
-				const label = document.createElement('span');
-				label.className = 'et-local-label';
-				label.textContent = 'Added on this computer';
-				label.title = descriptor.url;
-				const copy = document.createElement('button');
-				copy.className = 'et-mini';
-				copy.textContent = 'Copy entry';
-				copy.title = 'Copy this as a registry.json entry, to give it to everyone';
-				copy.addEventListener('click', () => {
-					const ok = copyText(registryEntryText(descriptor));
-					Blockbench.showQuickMessage(ok ? 'Copied. Paste it into registry.json to share it.' : 'Could not reach the clipboard', 2500);
-				});
-				const remove = document.createElement('button');
-				remove.className = 'et-mini';
-				remove.textContent = 'Remove';
-				remove.addEventListener('click', async () => {
-					remove.disabled = true;
-					await removeLocalTool(descriptor.id);
-					redrawPanels();
-				});
-				local.appendChild(label);
-				local.appendChild(copy);
-				local.appendChild(remove);
-				card.appendChild(local);
-			}
-
-			card.appendChild(foot);
-			grid.appendChild(card);
+		// A branch list open over this panel stays open on its tool's new picker, if it has one.
+		if (branch_list && branch_list.panel === panel) {
+			const again = branchButton(scroll, branch_list.id);
+			const reopen = again && !again.disabled ? branch_openers.get(again) : null;
+			if (reopen) reopen(true);
+			else closeBranchList(false);
 		}
 	};
 
 	search.addEventListener('input', draw);
-	add.addEventListener('click', () => openAddToolDialog(() => redrawPanels()));
 	refresh.addEventListener('click', async () => {
 		refresh.disabled = true;
-		refresh.textContent = 'Refreshing...';
+		refresh.classList.add('et-spin');
 		try {
 			const on = Array.from(readEnabled());
 			for (const id of on) unloadModule(id);
@@ -3856,22 +4789,24 @@ function buildCardPanel(options) {
 				const descriptor = registry.find((e) => e.id === id);
 				if (descriptor) await loadModule(descriptor);
 			}
+			panel_notes = null;
 		} finally {
 			refresh.disabled = false;
-			refresh.textContent = 'Refresh';
+			refresh.classList.remove('et-spin');
 			redrawPanels();
 		}
 	});
 
-	panel.appendChild(account);
-	panel.appendChild(bar);
-	panel.appendChild(grid);
+	panel.appendChild(top);
+	panel.appendChild(scroll);
 	panels.add({ element: panel, draw: draw });
 	draw();
 	return panel;
 }
 
 function syncPluginPage() {
+	// A branch list whose picker left the page, with the panel or the dialog, goes too.
+	if (branch_list && !branch_list.anchor.isConnected) closeBranchList(false);
 	const bar = document.getElementById('plugin_browser_page_tab_bar');
 	const stale = document.getElementById('et_page_panel');
 	if (!bar) {
@@ -4082,6 +5017,7 @@ registrar.register(PLUGIN_ID, {
 		}
 		loader.ctx.cleanup('a sign-in in progress', () => { if (cancel_sign_in) cancel_sign_in(); });
 		loader.ctx.cleanup('panels on screen', () => panels.clear());
+		loader.ctx.cleanup('an open branch list', () => closeBranchList(false));
 		told_on_its_own.clear();
 
 		// Outside tools first, so a slow check-in never holds them up. Then the check-in, and

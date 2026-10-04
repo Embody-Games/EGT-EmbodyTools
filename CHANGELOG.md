@@ -2,6 +2,32 @@
 
 Generated from `changelog.json` by `scripts/changelog.mjs`. Edit that file, not this one.
 
+## v3.2.0 - A new Tools tab, and four more tools
+
+_2026-10-03_
+
+### How to use
+
+- Click a tool's row to see more about it, and click it again to close it.
+- Use the search box and the All, On and Off buttons above the list to find a tool.
+
+### Added
+
+- The Tools tab is now a list. The Google sign-in is at the top, then search, What's new, Add tool and Refresh, and each tool is a row with its own icon. Only the list scrolls, so your account and the search stay in view.
+- An opened row shows whether the tool is running and from which branch, a team tool's latest notes, who made it and what it needs.
+- The branch list next to a team tool's switch says what each branch is for and ticks the one you're on.
+- Four tools from Blockbench's plugin store, off until you switch them on: Preview Scene Customiser, GeckoLib Models & Animations, Shape Generator and Hytale Models. Hytale Models has file access, which it needs to open a .blockymodel with its textures.
+
+### Changed
+
+- An outside tool you also installed on its own in Blockbench runs as that copy, and its row says so, like the team tools already did.
+
+### Fixed
+
+- Switching a tool off also takes away anything it added when it started and forgot to remove, so switching it on and off no longer piles things up.
+- Pressing Enter in the Tools tab's search box or on its buttons no longer closes the Plugins window.
+- The notes in What's new have their bullet points again.
+
 ## v3.1.0 - What's new, after every update
 
 _2026-10-03_
