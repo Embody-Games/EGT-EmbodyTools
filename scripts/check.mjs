@@ -22,6 +22,16 @@ const REGISTRY_URL = 'https://raw.githubusercontent.com/Embody-Games/EGT-EmbodyT
 const TEAM_LINK = /^https:\/\/(?:raw\.githubusercontent\.com|github\.com)\/Embody-Games\//i;
 
 /*
+ * The outside tools Embody Games has decided may have file access ("native": true), each with
+ * the link it was decided for, so a new link has to be decided again. Any other tool asking
+ * is refused. Hytale Models: David, 2026-10-04, since opening a .blockymodel in the desktop
+ * app reads its textures from the same folder.
+ */
+const FILE_ACCESS = new Map([
+	['hytale_plugin', 'https://raw.githubusercontent.com/JannisX11/blockbench-plugins/master/plugins/hytale_plugin/hytale_plugin.js'],
+]);
+
+/*
  * What no file here may have, since this repo is public. build-release.mjs in the working
  * folder refuses the same in the release build. This file is scanned too, so each pattern is
  * written not to match its own source.
@@ -133,7 +143,9 @@ if (registry) {
 		if (typeof tool.name !== 'string' || !tool.name.trim()) problem(where + ': no name');
 		if (typeof tool.url !== 'string' || !/^https:\/\/\S+$/.test(tool.url)) problem(where + ': url must be an https link');
 		else if (TEAM_LINK.test(tool.url)) problem(where + ': a team tool, which only comes through the sign-in, never this list');
-		if (tool.native !== undefined && tool.native !== false) problem(where + ': asks for file access, which no outside tool gets without Embody Games deciding');
+		if (tool.native !== undefined && tool.native !== false && !(tool.native === true && FILE_ACCESS.get(tool.id) === tool.url)) {
+			problem(where + ': asks for file access, which no outside tool gets without Embody Games deciding (FILE_ACCESS, above)');
+		}
 		if (tool.tags !== undefined && !(Array.isArray(tool.tags) && tool.tags.every((t) => typeof t === 'string'))) problem(where + ': tags must be a list of text');
 	});
 }

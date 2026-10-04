@@ -1,5 +1,5 @@
 {
-  "$comment": "The outside tools EmbodyTools offers: tools that are not Embody Games' own, loaded from their own public link with no sign-in. Add an entry and everyone sees the card at their next Blockbench start, with no EmbodyTools release. The team's tools are not listed here: they come from Embody Games' access service, for a signed-in Embody account, and EmbodyTools never loads a link into the Embody-Games GitHub from this list. 'id' must match the id the tool registers, and is what its cache file and its switch are keyed by, so never reuse one for a different tool. 'url' is fetched as it is, with no sign-in. Everything except id, name and url is the card's text, until the tool itself has loaded. No outside tool gets file access ('native') unless Embody Games decides it, and npm test refuses one that asks.",
+  "$comment": "The outside tools EmbodyTools offers: tools that are not Embody Games' own, loaded from their own public link with no sign-in. Add an entry and everyone sees the card at their next Blockbench start, with no EmbodyTools release. The team's tools are not listed here: they come from Embody Games' access service, for a signed-in Embody account, and EmbodyTools never loads a link into the Embody-Games GitHub from this list. 'id' must match the id the tool registers, and is what its cache file and its switch are keyed by, so never reuse one for a different tool. 'url' is fetched as it is, with no sign-in. Everything except id, name and url is the card's text, until the tool itself has loaded. No outside tool gets file access ('native') unless Embody Games decides it: npm test refuses one that asks unless scripts/check.mjs lists it in FILE_ACCESS, with its link.",
   "version": 1,
   "tools": [
     {
@@ -33,6 +33,15 @@
       "description": "Builds octagons and hexadecagons out of rotated cubes, solid or hollow, at the size, centre and axis you set. Filter > Generate shape, in formats that rotate cubes.",
       "tags": ["Modeling"],
       "url": "https://raw.githubusercontent.com/JannisX11/blockbench-plugins/master/plugins/shape_generator.js"
+    },
+    {
+      "id": "hytale_plugin",
+      "name": "Hytale Models",
+      "author": "JannisX11, Kanno",
+      "description": "Create models and animations for Hytale: the Hytale character and prop formats, and .blockymodel files opened with their textures.",
+      "tags": ["Hytale"],
+      "native": true,
+      "url": "https://raw.githubusercontent.com/JannisX11/blockbench-plugins/master/plugins/hytale_plugin/hytale_plugin.js"
     }
   ]
 }
