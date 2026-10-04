@@ -1,4 +1,17 @@
 {
+	"3.3.1": {
+		"title": "The Tools tab first",
+		"author": "Embody Games",
+		"date": "2026-10-04",
+		"categories": [
+			{
+				"title": "Changed",
+				"list": [
+					"EmbodyTools' page in the Plugins window opens on its Tools tab, which comes first in the tab bar."
+				]
+			}
+		]
+	},
 	"3.3.0": {
 		"title": "Each tool's own icon",
 		"author": "Embody Games",

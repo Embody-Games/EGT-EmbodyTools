@@ -48,7 +48,7 @@ const PLUGIN_ID = 'embodytools';
 // Bumped on every deploy during testing, so the plugin page shows at a glance whether the
 // running copy is the latest file. If the page does not say this number, Blockbench is
 // reading some other file.
-const PLUGIN_VERSION = '3.3.0';
+const PLUGIN_VERSION = '3.3.1';
 const TAG = '[embodytools]';
 
 /*
@@ -4207,6 +4207,10 @@ function openBrowser() {
 const PAGE_TAB = 'embodytools_modules';
 let page_observer = null;
 let page_sync_queued = false;
+// Whether EmbodyTools' page was the one showing at the last sync. Arriving on it, from another
+// plugin's page or with the Plugins window opening, it shows the Tools tab first (David,
+// 2026-10-04); another tab picked while on the page stays picked.
+let page_was_ours = false;
 
 // Walk up from an element to the Vue view-model that owns `selected_plugin`.
 function pluginPageVue() {
@@ -4968,6 +4972,7 @@ function syncPluginPage() {
 	const stale = document.getElementById('et_page_panel');
 	if (!bar) {
 		if (stale) stale.remove();
+		page_was_ours = false;
 		return;
 	}
 	const vm = pluginPageVue();
@@ -4979,10 +4984,16 @@ function syncPluginPage() {
 		// Our tab's name left in page_tab hides every tab of the next plugin's page, and
 		// Blockbench doesn't put it back itself, so its own About shows again.
 		if (vm && vm.page_tab === PAGE_TAB) vm.page_tab = 'about';
+		page_was_ours = false;
 		return;
 	}
+	// Just arrived on EmbodyTools' page: the Tools tab first.
+	if (!page_was_ours) {
+		page_was_ours = true;
+		vm.page_tab = PAGE_TAB;
+	}
 
-	// Our tab in Blockbench's own tab bar.
+	// Our tab in Blockbench's own tab bar, first in it.
 	let tab = document.getElementById('et_page_tab');
 	if (!tab || tab.parentElement !== bar) {
 		if (tab) tab.remove();
@@ -4993,8 +5004,8 @@ function syncPluginPage() {
 			vm.page_tab = PAGE_TAB;
 			queuePageSync();
 		});
-		bar.appendChild(tab);
 	}
+	if (bar.firstElementChild !== tab) bar.insertBefore(tab, bar.firstElementChild);
 	const active = vm.page_tab === PAGE_TAB;
 	tab.className = active ? 'selected' : '';
 

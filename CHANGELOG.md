@@ -2,6 +2,14 @@
 
 Generated from `changelog.json` by `scripts/changelog.mjs`. Edit that file, not this one.
 
+## v3.3.1 - The Tools tab first
+
+_2026-10-04_
+
+### Changed
+
+- EmbodyTools' page in the Plugins window opens on its Tools tab, which comes first in the tab bar.
+
 ## v3.3.0 - Each tool's own icon
 
 _2026-10-04_
