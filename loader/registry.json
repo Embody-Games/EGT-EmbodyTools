@@ -1,5 +1,5 @@
 {
-  "$comment": "The outside tools EmbodyTools offers: tools that are not Embody Games' own, loaded from their own public link with no sign-in. Add an entry and everyone sees the card at their next Blockbench start, with no EmbodyTools release. The team's tools are not listed here: they come from Embody Games' access service, for a signed-in Embody account, and EmbodyTools never loads a link into the Embody-Games GitHub from this list. 'id' must match the id the tool registers, and is what its cache file and its switch are keyed by, so never reuse one for a different tool. 'url' is fetched as it is, with no sign-in. Everything except id, name and url is the card's text, until the tool itself has loaded. No outside tool gets file access ('native') unless Embody Games decides it: npm test refuses one that asks unless scripts/check.mjs lists it in FILE_ACCESS, with its link.",
+  "$comment": "The outside tools EmbodyTools offers: tools that are not Embody Games' own, loaded from their own public link with no sign-in. Add an entry and everyone sees the card at their next Blockbench start, with no EmbodyTools release. The team's tools are not listed here: they come from Embody Games' access service, for a signed-in Embody account, and EmbodyTools never loads a link into the Embody-Games GitHub from this list. 'id' must match the id the tool registers, and is what its cache file and its switch are keyed by, so never reuse one for a different tool. 'url' is fetched as it is, with no sign-in. Everything except id, name, url and branches is the card's text, until the tool itself has loaded. 'branches' lists other builds of a tool for the branch picker on its row, each { name, url, note }, with 'url' as the default everyone gets; EmbodyTools 3.4.0 and newer show them. No outside tool gets file access ('native') unless Embody Games decides it: npm test refuses one that asks unless scripts/check.mjs lists it in FILE_ACCESS, with its link and each of its builds' links.",
   "version": 1,
   "tools": [
     {
@@ -41,7 +41,19 @@
       "description": "Create models and animations for Hytale: the Hytale character and prop formats, and .blockymodel files opened with their textures.",
       "tags": ["Hytale"],
       "native": true,
-      "url": "https://raw.githubusercontent.com/JannisX11/blockbench-plugins/master/plugins/hytale_plugin/hytale_plugin.js"
+      "url": "https://raw.githubusercontent.com/JannisX11/blockbench-plugins/master/plugins/hytale_plugin/hytale_plugin.js",
+      "branches": [
+        {
+          "name": "main",
+          "url": "https://raw.githubusercontent.com/JannisX11/hytale-blockbench-plugin/main/dist/hytale_plugin.js",
+          "note": "The next release, newer than the store's"
+        },
+        {
+          "name": "experimental",
+          "url": "https://raw.githubusercontent.com/JannisX11/hytale-blockbench-plugin/experimental/dist/hytale_plugin.js",
+          "note": "Newest, with features still being tried"
+        }
+      ]
     }
   ]
 }

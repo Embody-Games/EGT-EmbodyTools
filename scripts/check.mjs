@@ -23,13 +23,26 @@ const TEAM_LINK = /^https:\/\/(?:raw\.githubusercontent\.com|github\.com)\/Embod
 
 /*
  * The outside tools Embody Games has decided may have file access ("native": true), each with
- * the link it was decided for, so a new link has to be decided again. Any other tool asking
- * is refused. Hytale Models: David, 2026-10-04, since opening a .blockymodel in the desktop
- * app reads its textures from the same folder.
+ * the links it was decided for: its own and each of its builds' ("branches"), which get the
+ * same file access, so a new link has to be decided again. Any other tool asking is refused.
+ * Hytale Models: David, 2026-10-04, since opening a .blockymodel in the desktop app reads its
+ * textures from the same folder, and its main and experimental builds from its author's own
+ * repo, the same day.
  */
 const FILE_ACCESS = new Map([
-	['hytale_plugin', 'https://raw.githubusercontent.com/JannisX11/blockbench-plugins/master/plugins/hytale_plugin/hytale_plugin.js'],
+	['hytale_plugin', [
+		'https://raw.githubusercontent.com/JannisX11/blockbench-plugins/master/plugins/hytale_plugin/hytale_plugin.js',
+		'https://raw.githubusercontent.com/JannisX11/hytale-blockbench-plugin/main/dist/hytale_plugin.js',
+		'https://raw.githubusercontent.com/JannisX11/hytale-blockbench-plugin/experimental/dist/hytale_plugin.js',
+	]],
 ]);
+const decided = (tool, url) => (FILE_ACCESS.get(tool.id) || []).includes(url);
+
+// A build's name, by the loader's own rule for a branch, and the names it keeps for a tool's
+// own link, which a build can't take. The loader drops a build it can't use; this refuses it.
+const BUILD_NAME = /^[A-Za-z0-9._\/-]{1,100}$/;
+const OWN_LINK_NAMES = new Set(['store', 'release']);
+const MAX_BUILDS = 10;
 
 /*
  * What no file here may have, since this repo is public. build-release.mjs in the working
@@ -143,8 +156,30 @@ if (registry) {
 		if (typeof tool.name !== 'string' || !tool.name.trim()) problem(where + ': no name');
 		if (typeof tool.url !== 'string' || !/^https:\/\/\S+$/.test(tool.url)) problem(where + ': url must be an https link');
 		else if (TEAM_LINK.test(tool.url)) problem(where + ': a team tool, which only comes through the sign-in, never this list');
-		if (tool.native !== undefined && tool.native !== false && !(tool.native === true && FILE_ACCESS.get(tool.id) === tool.url)) {
+		if (tool.native !== undefined && tool.native !== false && !(tool.native === true && decided(tool, tool.url))) {
 			problem(where + ': asks for file access, which no outside tool gets without Embody Games deciding (FILE_ACCESS, above)');
+		}
+		if (tool.branches !== undefined) {
+			if (!Array.isArray(tool.branches) || !tool.branches.length || tool.branches.length > MAX_BUILDS) {
+				problem(where + ': branches must be a list of 1 to ' + MAX_BUILDS + ' builds');
+			} else {
+				const names = new Set();
+				tool.branches.forEach((build, number) => {
+					const at = where + ', build ' + (build && typeof build.name === 'string' ? '"' + build.name + '"' : number + 1);
+					if (!build || typeof build !== 'object' || Array.isArray(build)) { problem(at + ' is not an object'); return; }
+					if (typeof build.name !== 'string' || !BUILD_NAME.test(build.name) || build.name.includes('..')) problem(at + ': the name must be a plain branch name');
+					else if (OWN_LINK_NAMES.has(build.name.toLowerCase())) problem(at + ': that name is what the tool\'s own link is called');
+					else if (names.has(build.name)) problem(at + ': the name is used twice');
+					names.add(build.name);
+					if (typeof build.url !== 'string' || !/^https:\/\/\S+$/.test(build.url)) problem(at + ': url must be an https link');
+					else if (TEAM_LINK.test(build.url)) problem(at + ': a team tool\'s link, which only comes through the sign-in, never this list');
+					else if (build.url === tool.url) problem(at + ': the tool\'s own link, which is already its default');
+					else if (tool.native === true && !decided(tool, build.url)) {
+						problem(at + ': would get the tool\'s file access, which needs its link decided too (FILE_ACCESS, above)');
+					}
+					if (build.note !== undefined && !(typeof build.note === 'string' && build.note.length <= 120)) problem(at + ': note must be text, 120 characters at most');
+				});
+			}
 		}
 		if (tool.tags !== undefined && !(Array.isArray(tool.tags) && tool.tags.every((t) => typeof t === 'string'))) problem(where + ': tags must be a list of text');
 	});

@@ -31,6 +31,8 @@ EmbodyTools never removes anything from your plugin list. A team tool you instal
 
 `loader/registry.json` lists the tools that aren't Embody Games' own. Each one loads from its own public link, with no sign-in. Adding a tool is an entry in that file: everyone sees its card at their next Blockbench start, with no EmbodyTools release. No outside tool gets file access unless Embody Games decides it, and `npm test` refuses one that isn't listed in `FILE_ACCESS` in `scripts/check.mjs`. So far that's Hytale Models, which opens a .blockymodel's textures from the same folder.
 
+An entry can also list other builds of its tool under `branches`, each with a name, a link and a line on what it is. Its row then gets a branch picker like a team tool's: the tool's own link first, as the default everyone gets, then the builds, picked on each computer and needing no sign-in. Hytale Models has its `main` and `experimental` builds from its author's own repo. A build gets its tool's file access, so `FILE_ACCESS` needs each build's link too.
+
 **Add tool** on the Tools tab adds a plugin on your computer only, from its link. It never gets file access.
 
 ## Releases
