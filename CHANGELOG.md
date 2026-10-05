@@ -2,6 +2,22 @@
 
 Generated from `changelog.json` by `scripts/changelog.mjs`. Edit that file, not this one.
 
+## v3.4.0 - Hytale Models' newer builds
+
+_2026-10-04_
+
+### How to use
+
+- On EmbodyTools' Tools tab, pick main or experimental in the picker next to Hytale Models' switch, and store to go back.
+
+### Added
+
+- Hytale Models has a branch picker on its row, like the team's tools: store is the release everyone gets, main is the next release, and experimental has features still being tried. The pick is for your computer only, needs no sign-in, and both newer builds open .blockymodel files with their textures like the store one.
+
+### Fixed
+
+- A tool's buttons no longer pile up in Blockbench's toolbars. Switching a tool off and on, or changing its build or branch, while no model it works with was open used to leave a copy of its buttons each time, and they all showed up together later.
+
 ## v3.3.1 - The Tools tab first
 
 _2026-10-04_

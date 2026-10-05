@@ -48,7 +48,7 @@ const PLUGIN_ID = 'embodytools';
 // Bumped on every deploy during testing, so the plugin page shows at a glance whether the
 // running copy is the latest file. If the page does not say this number, Blockbench is
 // reading some other file.
-const PLUGIN_VERSION = '3.3.1';
+const PLUGIN_VERSION = '3.4.0';
 const TAG = '[embodytools]';
 
 /*
@@ -97,6 +97,9 @@ const nativeFetch = (typeof fetch === 'function') ? fetch.bind(globalThis) : nul
  *
  * Everything except id, name and url is presentation for the card, used until the tool has
  * actually been fetched, after which the tool's own values win.
+ *
+ * `branches`, when an entry has it, lists other builds of the tool for its branch picker,
+ * each { name, url, note }, with `url` itself the default (withCleanBuilds).
  *
  * A `file:` entry here is a developer's override: it replaces the service's tool of the same
  * id, so a build can be tried off disk before it is pushed. It is only true on one machine.
@@ -804,8 +807,6 @@ function createContext(id) {
 // ===========================================================================
 
 async function fetchSource(descriptor) {
-	const cache_name = descriptor.id + '.js';
-
 	/*
 	 * A module read straight off disk, for working on one before it is hosted anywhere.
 	 * `file:C:/path/to/module.js`. Desktop only, and not something to ship in a registry
@@ -819,9 +820,15 @@ async function fetchSource(descriptor) {
 		return { source: nodeFs.readFileSync(local, 'utf8'), origin: 'local file' };
 	}
 
+	// Another build of it, picked on its row: from that build's link, with a copy on disk of
+	// its own, so a copy of one build never runs as another.
+	const build = pickedBuild(descriptor);
+	const link = build ? build.url : descriptor.url;
+	const cache_name = descriptor.id + (build ? '@' + encodeURIComponent(build.name) : '') + '.js';
+
 	// Cache-busted, because the whole point is that pushing a new file reaches people. The
 	// disk cache is what makes an offline start work, not the HTTP cache.
-	const url = descriptor.url + (descriptor.url.includes('?') ? '&' : '?') + 'v=' + Date.now();
+	const url = link + (link.includes('?') ? '&' : '?') + 'v=' + Date.now();
 
 	try {
 		const { response, text: source } = await fetchWithin(url);
@@ -834,7 +841,7 @@ async function fetchSource(descriptor) {
 	} catch (error) {
 		const cached = readCache(cache_name);
 		if (cached) {
-			grumble('could not fetch ' + descriptor.id + ', using the cached copy', error.message);
+			grumble('could not fetch ' + descriptor.id + (build ? ' (' + build.name + ')' : '') + ', using the cached copy', error.message);
 			return { source: cached, origin: 'cache' };
 		}
 		throw error;
@@ -1063,6 +1070,41 @@ function sweepPluginLeftovers(created_ids) {
 	return removed;
 }
 
+/*
+ * Buttons a tool put in Blockbench's toolbars that stay there once it's gone. Blockbench's
+ * delete() takes a button out only of the toolbars in its own list, and a toolbar's redraw takes
+ * itself off that list while the button's condition is false: a Hytale button while a generic
+ * model is open, or no model at all. So a tool switched off or reloaded then leaves its button in
+ * the toolbar, and each load adds one more, all of them drawn once the condition holds again
+ * (David, 2026-10-04: six of each of Hytale Models' buttons after switching its build; plain
+ * Blockbench does the same when a plugin is reloaded). Only what wasn't in a toolbar before the
+ * tool loaded and is no longer Blockbench's item for its id is taken out.
+ */
+function toolbarSnapshot() {
+	const out = new Map();
+	if (typeof Toolbars === 'undefined' || !Toolbars) return out;
+	for (const toolbar of Object.values(Toolbars)) {
+		if (toolbar && Array.isArray(toolbar.children)) out.set(toolbar, new Set(toolbar.children));
+	}
+	return out;
+}
+
+function sweepToolbars(before) {
+	let removed = 0;
+	if (typeof Toolbars === 'undefined' || !Toolbars) return removed;
+	const registered = (typeof BarItems !== 'undefined' && BarItems) ? BarItems : {};
+	for (const toolbar of Object.values(Toolbars)) {
+		if (!toolbar || !Array.isArray(toolbar.children) || typeof toolbar.remove !== 'function') continue;
+		const had = before.get(toolbar);
+		for (const child of toolbar.children.slice()) {
+			if (!child || typeof child !== 'object' || typeof child.id !== 'string') continue;
+			if ((had && had.has(child)) || registered[child.id] === child) continue;
+			try { toolbar.remove(child); removed++; } catch (error) { /* left as it is */ }
+		}
+	}
+	return removed;
+}
+
 function versionBlocked(module) {
 	if (module.variant === 'desktop' && !isDesktop) return 'desktop app only';
 	if (module.variant === 'web' && isDesktop) return 'web app only';
@@ -1123,6 +1165,13 @@ async function loadModule(descriptor) {
 
 		created = createContext(descriptor.id);
 		const bar_items_before = new Set(barItemIds());
+		// Recorded before anything else, so it runs last of all: the toolbar buttons any tool,
+		// a plugin or one of ours, leaves behind once it's gone (sweepToolbars).
+		const toolbars_before = toolbarSnapshot();
+		created.ctx.cleanup('toolbar buttons ' + descriptor.id + ' left', () => {
+			const removed = sweepToolbars(toolbars_before);
+			if (removed) grumble(descriptor.id + ' left ' + removed + (removed === 1 ? ' toolbar button' : ' toolbar buttons') + ' behind; removed them');
+		});
 		const module = evaluateModule(fetched.source, created.ctx, effective);
 		entry.module = module;
 		// Kept for its row while it's off, from now on (ownIcon).
@@ -1242,7 +1291,70 @@ function parseRegistry(parsed) {
 function outsideOnly(list) {
 	const team_ids = teamToolIds();
 	return list.filter((entry) => /^https:\/\//i.test(entry.url) && /^[a-z0-9_]+$/.test(entry.id)
-		&& !isTeamLink(entry.url) && !team_ids.has(entry.id));
+		&& !isTeamLink(entry.url) && !team_ids.has(entry.id)).map(withCleanBuilds);
+}
+
+/*
+ * Other builds of an outside tool, for the branch picker on its row (David, 2026-10-04:
+ * Hytale Models' main and experimental builds, from its author's own repo). An entry's
+ * `branches` lists them, each { name, url, note }: a plain branch name, an https link that
+ * isn't the team's or the entry's own, and a line on what it is. The entry's own link stays
+ * the default, the one everyone gets. Its file access goes with every build, which is why the
+ * public repo's checks want each build's link decided too (FILE_ACCESS there). At most ten,
+ * the first of each name, and never one named like the default ('store', 'release'), so it
+ * can't pass for it. Anything else is dropped, and an entry with none left has no picker.
+ */
+const MAX_BUILDS = 10;
+const NOT_BUILD_NAMES = new Set(['store', 'release']);
+function withCleanBuilds(entry) {
+	if (!entry || entry.branches === undefined) return entry;
+	const builds = [];
+	for (const build of Array.isArray(entry.branches) ? entry.branches : []) {
+		if (builds.length === MAX_BUILDS) break;
+		if (!build || typeof build !== 'object') continue;
+		const { name, url, note } = build;
+		if (!goodBranch(name) || NOT_BUILD_NAMES.has(name.toLowerCase()) || builds.some((b) => b.name === name)) continue;
+		if (typeof url !== 'string' || !/^https:\/\/\S+$/i.test(url) || isTeamLink(url) || url === entry.url) continue;
+		const clean = { name: name, url: url };
+		if (typeof note === 'string' && note.trim()) clean.note = note.trim().slice(0, 120);
+		builds.push(clean);
+	}
+	const copy = Object.assign({}, entry);
+	if (builds.length) copy.branches = builds;
+	else delete copy.branches;
+	return copy;
+}
+
+// An outside tool's other builds, or null when it has none to pick. Never a team tool's,
+// whose branches the service lists, nor one added on this computer.
+function outsideBuilds(descriptor) {
+	return descriptor && !descriptor.team && !descriptor.local && Array.isArray(descriptor.branches)
+		&& descriptor.branches.length ? descriptor.branches : null;
+}
+
+// What an outside tool's own link is called in its picker: Blockbench's store copy, or its release.
+function defaultBuildName(descriptor) {
+	return STORE_FILES.test(String(descriptor.url)) ? 'store' : 'release';
+}
+
+// The build picked on an outside tool's row, { name, url, note }, or null for its own link.
+function buildInUse(descriptor) {
+	const picked = chosenBranch(descriptor.id);
+	const builds = picked ? outsideBuilds(descriptor) : null;
+	return (builds && builds.find((build) => build.name === picked)) || null;
+}
+
+// The same, for loading it: a pick its entry doesn't list any more is forgotten, as a team
+// tool's branch is once the service says it's gone, and the tool's own link loads.
+function pickedBuild(descriptor) {
+	const picked = chosenBranch(descriptor.id);
+	if (!picked || descriptor.team) return null;
+	const build = buildInUse(descriptor);
+	if (!build) {
+		writeBranchChoice(descriptor.id, null);
+		grumble(descriptor.id + ' has no build called ' + picked + ' any more, so it loads from its own link again');
+	}
+	return build;
 }
 
 async function fetchRegistry() {
@@ -1326,6 +1438,7 @@ function unloadAll() {
  *                a clock that hasn't been turned back.
  *   Branches     Each card can load its tool from another branch of its repo (/v1/branches,
  *                /v1/tools/<id>?branch=), picked per computer. A copy is of one branch.
+ *                An outside tool can have builds to pick too, listed in its registry entry.
  */
 const SERVICE_URL = 'https://egt-tool-access.embodygamestools.workers.dev';
 const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
@@ -1350,8 +1463,8 @@ const TEAM_LIST_KEY = 'embodytools.team_tools';
 const REFUSED_KEY = 'embodytools.team_refused';
 // The email of the account signed in here, so a start knows a sign-in was saved. Not secret.
 const SIGNED_IN_KEY = 'embodytools.signed_in_as';
-// The branch picked for each team tool on this computer, when it isn't the tool's default:
-// { "<id>": "<branch>" }. Not secret, and kept across sign-outs.
+// The branch picked for each team tool on this computer, or build for an outside tool, when it
+// isn't the tool's default: { "<id>": "<branch>" }. Not secret, and kept across sign-outs.
 const BRANCHES_KEY = 'embodytools.branches';
 
 /*
@@ -2340,27 +2453,50 @@ async function loadBranches() {
 }
 
 /*
- * What a team tool's branch picker shows: the default first, then its other branches, and
- * the picked one even when the list doesn't have it (`missing`, when there is a list). `value`
+ * What a tool can be switched to, { default, branches }, or null while there's no list: a team
+ * tool's from the service, an outside tool's from its registry entry (outsideBuilds), with its
+ * own link as the default, called 'store' or 'release' (defaultBuildName).
+ */
+function branchInfo(descriptor) {
+	if (descriptor.team) return (branch_lists && branch_lists.get(descriptor.id)) || null;
+	const builds = outsideBuilds(descriptor);
+	return builds ? { default: defaultBuildName(descriptor), branches: builds.map((build) => build.name) } : null;
+}
+
+/*
+ * What a tool's branch picker shows: the default first, then its other branches, and the
+ * picked one even when the list doesn't have it (`missing`, when there is a list). `value`
  * '' is the default. Each has the `kind` its icon is picked by (branchKind), and so does the
- * picker, for the one in use. None at all while there's no list and nothing picked, as before
- * the service has listed the branches. Changing it only makes sense online, with a list to
- * pick from, and while EmbodyTools runs the tool.
+ * picker, for the one in use. None at all for a team tool while there's no list and nothing
+ * picked, as before the service has listed the branches, and none for an outside tool with no
+ * builds listed. A team tool's only changes online, with a list to pick from; an outside tool's
+ * builds need no sign-in (marked `outside`, with the entry's line on each as `note`). Either
+ * only while EmbodyTools runs the tool.
  */
 function branchPicker(descriptor) {
-	if (!descriptor || !descriptor.team) return null;
-	const info = branch_lists ? branch_lists.get(descriptor.id) : null;
+	if (!descriptor) return null;
+	const outside = !descriptor.team;
+	const builds = outside ? outsideBuilds(descriptor) : null;
+	if (outside && !builds) return null;
+	const info = branchInfo(descriptor);
 	const picked = chosenBranch(descriptor.id);
 	if (!info && !picked) return null;
-	const options = [{ value: '', label: info ? info.default : 'default', kind: branchKind(info, '') }];
+	const option = (fields) => (outside ? Object.assign(fields, { outside: true }) : fields);
+	const options = [option({ value: '', label: info ? info.default : 'default', kind: branchKind(info, '') })];
 	if (info) {
-		for (const name of info.branches) if (name !== info.default) options.push({ value: name, label: name, kind: 'branch' });
+		for (const name of info.branches) {
+			if (name === info.default) continue;
+			const build = builds && builds.find((b) => b.name === name);
+			options.push(option(build && build.note ? { value: name, label: name, kind: 'branch', note: build.note }
+				: { value: name, label: name, kind: 'branch' }));
+		}
 	}
-	if (picked && !options.some((option) => option.value === picked)) {
-		options.push({ value: picked, label: picked, kind: 'branch', missing: !!info });
+	if (picked && !options.some((o) => o.value === picked)) {
+		options.push(option({ value: picked, label: picked, kind: 'branch', missing: !!info }));
 	}
+	const usable = outside || team.state === 'online';
 	let title = 'The branch this tool loads from';
-	if (team.state !== 'online') title = 'Branches can be picked while signed in and online';
+	if (!usable) title = 'Branches can be picked while signed in and online';
 	else if (ownCopyLock(descriptor)) title = 'Installed on its own in Blockbench, so that copy runs';
 	else if (!info) title = 'The branches could not be listed. Refresh to try again.';
 	else if (options.length < 2) {
@@ -2370,24 +2506,27 @@ function branchPicker(descriptor) {
 		options,
 		value: picked || '',
 		kind: branchKind(info, picked || ''),
-		enabled: team.state === 'online' && !!info && options.length > 1 && !ownCopyLock(descriptor),
+		enabled: usable && !!info && options.length > 1 && !ownCopyLock(descriptor),
 		title,
 	};
 }
 
 /*
- * Picks a branch for a tool, '' or its default's name for the default. A tool that is running,
- * or failed, loads again from the new branch. One that's off loads from it when switched on.
+ * Picks a branch for a tool, '' or its default's name for the default; for an outside tool,
+ * only one of the builds its entry lists. A tool that is running, or failed, loads again from
+ * the new branch. One that's off loads from it when switched on.
  */
 async function setBranch(id, name) {
-	const info = branch_lists ? branch_lists.get(id) : null;
-	const pick = name && goodBranch(name) && !(info && name === info.default) ? name : null;
+	const descriptor = registry.find((d) => d.id === id);
+	const outside = !!descriptor && !descriptor.team;
+	const info = descriptor ? branchInfo(descriptor) : null;
+	let pick = name && goodBranch(name) && !(info && name === info.default) ? name : null;
+	if (pick && outside && !(info && info.branches.includes(pick))) pick = null;
 	if (chosenBranch(id) === pick) return;
 	writeBranchChoice(id, pick);
-	say(id + ' loads from ' + (pick ? 'the branch ' + pick : 'its default branch') + ' from now on');
+	say(id + ' loads from ' + (pick ? 'the branch ' + pick : outside ? 'its own link' : 'its default branch') + ' from now on');
 	if (!live.has(id)) return;
 	unloadModule(id);
-	const descriptor = registry.find((d) => d.id === id);
 	if (descriptor && readEnabled().has(id)) await loadModule(descriptor);
 }
 
@@ -3066,7 +3205,7 @@ async function fetchTeamSource(descriptor) {
 }
 
 // The outside list, then the team's, then what was added on this computer.
-let outside_list = REGISTRY.slice();
+let outside_list = REGISTRY.map(withCleanBuilds);
 
 function rebuildRegistry() {
 	const overrides = new Map(outside_list
@@ -3655,12 +3794,18 @@ function branchNote(option) {
 	if (option.kind === 'pinned') return 'Pinned, everyone stays on this version';
 	if (option.kind === 'main') return 'Default, everyone gets this';
 	if (option.missing) return 'Not listed any more';
+	// An outside tool's build, in the words of its registry entry.
+	if (option.note) return option.note;
 	return 'Try changes before they ship';
 }
 
 function branchHint(option) {
 	if (option.kind === 'pinned') return 'The team list holds everyone on ' + option.label;
+	if (option.kind === 'main' && option.outside) {
+		return (option.label === 'store' ? 'The release in Blockbench\'s plugin store' : 'Its release, from its own link') + ', the one everyone gets';
+	}
 	if (option.kind === 'main') return 'Load it from ' + option.label + ', the branch everyone gets';
+	if (option.missing && option.outside) return 'Picked on this computer before, but EmbodyTools\' list doesn\'t have it any more';
 	if (option.missing) return 'Picked on this computer before, but the tool\'s repo doesn\'t list it any more';
 	return 'Load it from ' + option.label + ', on this computer only';
 }
@@ -3775,7 +3920,9 @@ function toolSummary(descriptor) {
 		module && VARIANT_TEXT[module.variant] ? VARIANT_TEXT[module.variant] + ' only' : ''].filter(Boolean).join(', '));
 	// The row's own File access mark, said in full.
 	if (descriptor.native === true) add('File access', 'Can read and write files on this computer');
-	if (!descriptor.team && descriptor.url) add('Link', descriptor.url, 'link');
+	// The link it loads from: the build picked on its row, if there is one.
+	const build = descriptor.team ? null : buildInUse(descriptor);
+	if (!descriptor.team && descriptor.url) add('Link', build ? build.url : descriptor.url, 'link');
 	add('Tool id', descriptor.id, 'code');
 	return { chips, about };
 }
@@ -4657,10 +4804,10 @@ function buildCardPanel(options) {
 			}
 		});
 
-		// The middle: a team tool's branch, an outside tool's link, or what to do with one
-		// added on this computer.
+		// The middle: a team tool's branch, or an outside tool's build when its entry lists other
+		// builds, otherwise its link, or what to do with one added on this computer.
 		let side = element('span');
-		if (descriptor.team) {
+		if (descriptor.team || outsideBuilds(descriptor)) {
 			const picker = branchPicker(descriptor);
 			if (picker) {
 				const current = picker.options.find((option) => option.value === picker.value) || picker.options[0];
@@ -5167,7 +5314,7 @@ registrar.register(PLUGIN_ID, {
 		// whatever the last fetch left in `registry`, so the first load and every later
 		// one registered different checkboxes. The team tools as last listed come with it,
 		// locked until the check-in below, so their checkboxes are credited to us too.
-		outside_list = REGISTRY.slice();
+		outside_list = REGISTRY.map(withCleanBuilds);
 		team.list = readTeamListCache();
 		team.state = isDesktop ? 'checking' : 'web';
 		rebuildRegistry();
