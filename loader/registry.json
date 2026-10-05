@@ -54,6 +54,22 @@
           "note": "Newest, with features still being tried"
         }
       ]
+    },
+    {
+      "id": "brush_tuna",
+      "name": "Brush Tuna",
+      "author": "SnaveSutit & Embody Games",
+      "description": "Brush Presets made better: pen pressure settings and their own pressure curves for each preset, [ and ] to switch between presets, and a clearer list of them.",
+      "tags": ["Paint", "Texture"],
+      "url": "https://raw.githubusercontent.com/JannisX11/blockbench-plugins/master/plugins/brush_tuna/brush_tuna.js"
+    },
+    {
+      "id": "grayscale_preview",
+      "name": "Grayscale Preview",
+      "author": "JannisX11",
+      "description": "Shows the model and the UV editor in grayscale, to check values and contrast without the colours. View > Grayscale Preview turns it on and off.",
+      "tags": ["Viewport"],
+      "url": "https://raw.githubusercontent.com/JannisX11/blockbench-plugins/master/plugins/grayscale_preview.js"
     }
   ]
 }
