@@ -48,7 +48,7 @@ const PLUGIN_ID = 'embodytools';
 // Bumped on every deploy during testing, so the plugin page shows at a glance whether the
 // running copy is the latest file. If the page does not say this number, Blockbench is
 // reading some other file.
-const PLUGIN_VERSION = '3.4.0';
+const PLUGIN_VERSION = '3.5.0';
 const TAG = '[embodytools]';
 
 /*
@@ -880,15 +880,16 @@ function registerHolders() {
  * For the second, register is swapped for a stand-in while the source runs, so the plugin
  * hands its definition to us instead of to Blockbench and never appears in Blockbench's own
  * plugin list. That relies on the plugin registering while it is being read, which is what
- * plugins do. One that registers later, after an await, cannot be captured, and would go
- * on to register itself with Blockbench for real.
+ * plugins do. One that registers later, after an await, cannot be captured. It reaches
+ * Blockbench's own register, which refuses it ("load_plugin_failed") or, for an outside tool
+ * whose record is there (recordPlugin), throws on that plain object, so it never runs.
  *
  * File access (requireNativeModule, require) is handed over only when the registry entry
  * says `"native": true`. Blockbench grants it per plugin, and here every tool would be
  * asking as EmbodyTools: without the flag, a tool whose code lives on someone else's server
  * would get our permission silently, including in any future version of it.
  */
-function evaluateModule(source, ctx, descriptor) {
+function evaluateModule(source, ctx, descriptor, record) {
 	const native = !!(descriptor && descriptor.native === true);
 	const captured = [];
 	const holders = registerHolders();
@@ -932,20 +933,73 @@ function evaluateModule(source, ctx, descriptor) {
 	}
 	if (captured.length) {
 		if (captured.length > 1) grumble(label + ' registered ' + captured.length + ' plugins; only the first is used');
-		return adaptPlugin(captured[0], descriptor);
+		return adaptPlugin(captured[0], descriptor, record);
 	}
 	throw new Error('it neither returned a module nor registered a plugin while it was being read');
 }
 
 /*
+ * Blockbench's own record of a plugin it runs, Plugins.registered[id], which Blockbench makes
+ * before it reads the plugin's file, and its loaded_plugin and unloaded_plugin events, which
+ * it sends once the plugin's onload and its onunload have run. A plugin written for Blockbench
+ * can count on both: Brush Tuna's patch manager won't even register its patches without the
+ * record, and applies them only on the event (2026-10-05). So an outside tool, or one added on
+ * this computer, gets a record while it runs, by its id, as Blockbench keys a plugin by its
+ * file's name. It's a plain object, never a Plugin, so nothing goes into Plugins.all and the
+ * tool stays out of Blockbench's plugin list. A record already there, someone else's, is left
+ * alone. The team's tools get none: they're made for EmbodyTools and run as they always have.
+ */
+const NO_RECORD_IDS = new Set(['__proto__', 'constructor', 'prototype', 'unknown']);
+
+function pluginRecords() {
+	return typeof Plugins !== 'undefined' && Plugins && Plugins.registered && typeof Plugins.registered === 'object'
+		? Plugins.registered : null;
+}
+
+function recordPlugin(descriptor) {
+	const records = pluginRecords();
+	const id = descriptor && descriptor.id;
+	if (!records || !descriptor || descriptor.team || typeof id !== 'string' || !/^[a-z0-9_]+$/.test(id)
+		|| NO_RECORD_IDS.has(id) || Object.prototype.hasOwnProperty.call(records, id)) return null;
+	const record = {
+		id: id, title: descriptor.name || id, author: descriptor.author || '', description: descriptor.description || '',
+		icon: '', version: '', variant: 'both', tags: [], installed: true, disabled: false, source: 'embodytools',
+	};
+	records[id] = record;
+	return record;
+}
+
+function forgetPlugin(record) {
+	const records = pluginRecords();
+	if (record && records && records[record.id] === record) delete records[record.id];
+}
+
+function announcePlugin(event, record) {
+	if (!record || typeof Blockbench === 'undefined' || !Blockbench || typeof Blockbench.dispatchEvent !== 'function') return;
+	try {
+		Blockbench.dispatchEvent(event, { plugin: record });
+	} catch (error) {
+		complain('something listening for ' + event + ' of ' + record.id + ' threw', error);
+	}
+}
+
+/*
  * Wrap a captured plugin definition so it can be switched on and off like a module. Its
  * own onload and onunload do the work, called with `this` as the definition, which is
- * what Blockbench's Plugin instance amounts to from inside a plugin.
+ * what Blockbench's Plugin instance amounts to from inside a plugin. `record`, when the tool
+ * has one (recordPlugin), gets the definition's details, and Blockbench's events say it's
+ * loaded and unloaded.
  */
-function adaptPlugin(registration, descriptor) {
+function adaptPlugin(registration, descriptor, record) {
 	const definition = registration.options;
 	if (descriptor && registration.id !== descriptor.id) {
 		grumble('registry id "' + descriptor.id + '" loaded a plugin that calls itself "' + registration.id + '"');
+	}
+	if (record) {
+		for (const key of ['title', 'author', 'description', 'icon', 'version', 'variant']) {
+			if (typeof definition[key] === 'string') record[key] = definition[key];
+		}
+		if (Array.isArray(definition.tags)) record.tags = definition.tags.filter((tag) => typeof tag === 'string');
 	}
 	return {
 		id: registration.id,
@@ -966,6 +1020,8 @@ function adaptPlugin(registration, descriptor) {
 				const removed = added ? removeAdditions(added) : 0;
 				if (removed) grumble(registration.id + ' left ' + removed + ' event listeners or styles behind; removed them');
 			});
+			// Blockbench's unloaded_plugin, once its onunload has run, as Blockbench sends it.
+			if (record) ctx.cleanup('unloaded_plugin for ' + registration.id, () => announcePlugin('unloaded_plugin', record));
 			// Recorded before onload runs, so one that throws halfway still gets its onunload
 			// when the half-loaded tool is torn down, and leaves nothing behind.
 			ctx.cleanup('onunload of ' + registration.id, function () {
@@ -977,6 +1033,9 @@ function adaptPlugin(registration, descriptor) {
 			} finally {
 				added = onloadAdditions(before);
 			}
+			// And loaded_plugin once its onload has run. After the count of what onload added, so
+			// what other plugins do on hearing it is never taken for this tool's leftovers.
+			announcePlugin('loaded_plugin', record);
 		},
 	};
 }
@@ -1172,7 +1231,13 @@ async function loadModule(descriptor) {
 			const removed = sweepToolbars(toolbars_before);
 			if (removed) grumble(descriptor.id + ' left ' + removed + (removed === 1 ? ' toolbar button' : ' toolbar buttons') + ' behind; removed them');
 		});
-		const module = evaluateModule(fetched.source, created.ctx, effective);
+		// Blockbench's record of an outside tool (recordPlugin), from before its file is read
+		// until its onunload and unloaded_plugin are done: recorded here, so it goes last but one.
+		const record = recordPlugin(effective);
+		if (record) created.ctx.cleanup('Blockbench\'s record of ' + descriptor.id, () => forgetPlugin(record));
+		const module = evaluateModule(fetched.source, created.ctx, effective, record);
+		// Only a plugin needs it.
+		if (module.kind !== 'plugin') forgetPlugin(record);
 		entry.module = module;
 		// Kept for its row while it's off, from now on (ownIcon).
 		rememberIcon(descriptor.id, module.icon);
@@ -3436,41 +3501,273 @@ function noteLine(text) {
 	return escapeHtml(text);
 }
 
-// The window's contents. Every piece of text from the notes is escaped or cleaned.
-function notesHtml(groups) {
-	let html = '';
-	for (const group of groups) {
-		html += '<section class="et-notes-tool"><h2>' + escapeHtml(group.name)
-			+ (group.isNew ? ' <span class="et-notes-badge">New</span>' : '') + '</h2>';
-		if (group.isNew && group.description) html += '<p class="et-notes-note">' + escapeHtml(group.description) + '</p>';
-		if (group.off) html += '<p class="et-notes-note">Switched off on this computer. Switch it on in Tools &gt; EmbodyTools.</p>';
-		for (const entry of group.entries) {
-			html += '<h3>' + escapeHtml(entry.version + (entry.title ? ': ' + entry.title : '')) + '</h3>';
-			const how = entry.categories.filter((category) => category.title === HOW_TO_USE);
-			for (const category of how.concat(entry.categories.filter((category) => category.title !== HOW_TO_USE))) {
-				html += '<h4' + (category.title === HOW_TO_USE ? ' class="et-notes-how"' : '') + '>' + escapeHtml(category.title) + '</h4><ul>'
-					+ category.list.map((line) => '<li>' + noteLine(line) + '</li>').join('') + '</ul>';
-			}
-		}
-		if (group.more) html += '<p class="et-notes-note">And ' + group.more + ' older version' + (group.more === 1 ? '' : 's') + '.</p>';
-		html += '</section>';
-	}
-	return html;
+/*
+ * The window, as David picked it from four designs (2026-10-05): the tools down the left, the
+ * picked one's notes on the right, and Previous and Next beside Got it, so it keeps its size
+ * however many tools updated. A single tool gets its notes alone. Each part of a release gets
+ * a colour and an icon by its title (NOTE_KINDS), How to use comes first in a box of its own,
+ * and a tool that's switched off on this computer says so, with a button that switches it on.
+ */
+const NOTE_KINDS = [
+	{ kind: 'added', icon: 'sparkle', titles: ['added', 'new'] },
+	{ kind: 'changed', icon: 'swap', titles: ['changed', 'improved', 'updated'] },
+	{ kind: 'fixed', icon: 'wrench', titles: ['fixed', 'fixes', 'bug fixes'] },
+	{ kind: 'removed', icon: 'minus', titles: ['removed'] },
+	{ kind: 'other', icon: 'shield', titles: ['safeguards'] },
+];
+const OTHER_NOTE_KIND = { kind: 'other', icon: 'dot' };
+
+function noteKind(title) {
+	const key = String(title).trim().toLowerCase();
+	return NOTE_KINDS.find((entry) => entry.titles.includes(key)) || OTHER_NOTE_KIND;
 }
 
-// The window itself. `on_close` runs once, however it's closed.
-function showNotesDialog(groups, on_close) {
-	const html = notesHtml(groups);
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October',
+	'November', 'December'];
+
+// A release's date as the window says it: 2026-10-04 as "4 Oct", or `long`, "4 October", with
+// the year when it isn't this one. Any other way of writing it stays as it was written.
+function noteDate(text, long) {
+	const written = String(text || '');
+	const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(written);
+	const month = match ? Number(match[2]) : 0;
+	const day = match ? Number(match[3]) : 0;
+	if (!match || month < 1 || month > 12 || day < 1 || day > 31) return written;
+	const name = long ? MONTHS[month - 1] : MONTHS[month - 1].slice(0, 3);
+	return day + ' ' + name + (Number(match[1]) === new Date(Date.now()).getFullYear() ? '' : ' ' + match[1]);
+}
+
+// A line icon as markup, for the window's HTML. The paths are fixed strings (ICON_PATHS).
+const svgMarkup = (name) => '<span class="et-svg" aria-hidden="true">' + SVG_OPEN + (ICON_PATHS[name] || '') + '</svg></span>';
+
+/*
+ * What the window says about a tool: `item`, under its name in the list, and `summary`, under
+ * its name over its notes. `latest` is the What's new button's window, every tool's newest notes.
+ */
+function notesLines(group, latest) {
+	const newest = group.entries[0] || { version: '', date: '' };
+	const count = group.entries.length + (group.more || 0);
+	const when = newest.date ? noteDate(newest.date, true) : '';
+	if (latest) return { item: newest.version, summary: 'Version ' + newest.version + (when ? ', released ' + when : '') };
+	if (group.isNew) return { item: newest.version, summary: 'New on your list, version ' + newest.version };
+	if (count > 1) {
+		return { item: newest.version + ', ' + count + ' updates', summary: count + ' updates, up to ' + newest.version + (when ? ' on ' + when : '') };
+	}
+	return { item: newest.version, summary: 'Updated to ' + newest.version + (when ? ' on ' + when : '') };
+}
+
+// One release: its version, title and date, then How to use in its box, then each part.
+function noteEntryHtml(entry) {
+	const lines = (list) => '<ul class="et-wn-lines' + (list.length > 1 ? ' et-wn-many' : '') + '">'
+		+ list.map((line) => '<li>' + noteLine(line) + '</li>').join('') + '</ul>';
+	let html = '<section class="et-wn-version"><div class="et-wn-vhead"><span class="et-wn-pill">' + escapeHtml(entry.version) + '</span>'
+		+ (entry.title ? '<h3 class="et-wn-vtitle">' + escapeHtml(entry.title) + '</h3>' : '<span class="et-wn-vtitle"></span>')
+		+ (entry.date ? '<span class="et-wn-date">' + escapeHtml(noteDate(entry.date)) + '</span>' : '') + '</div>';
+	for (const category of entry.categories.filter((c) => c.title === HOW_TO_USE)) {
+		html += '<div class="et-wn-how">' + svgMarkup('bulb') + '<div class="et-wn-how-text"><div class="et-wn-how-label">'
+			+ escapeHtml(HOW_TO_USE) + '</div>' + lines(category.list) + '</div></div>';
+	}
+	for (const category of entry.categories.filter((c) => c.title !== HOW_TO_USE)) {
+		const kind = noteKind(category.title);
+		html += '<div class="et-wn-cat et-wn-' + kind.kind + '"><div class="et-wn-cat-head"><span class="et-wn-cat-icon">'
+			+ svgMarkup(kind.icon) + '</span><span class="et-wn-cat-label">' + escapeHtml(category.title) + '</span></div>'
+			+ lines(category.list) + '</div>';
+	}
+	return html + '</section>';
+}
+
+/*
+ * The window's contents: the list of tools when there's more than one, and each tool's notes,
+ * all but the first hidden until picked. Every piece of text from the notes is escaped or
+ * cleaned, and the tiles are filled with each tool's icon once it's mounted (fillNotesTile).
+ * No <header> here: Blockbench styles every header as its own title bar.
+ */
+function notesHtml(groups, options) {
+	const latest = !!(options && options.latest);
+	const many = groups.length > 1;
+	let html = '<div class="et-wn-body' + (many ? '' : ' et-wn-single') + '">';
+	if (many) {
+		html += '<nav class="et-wn-list" aria-label="' + (latest ? 'Tools' : 'Updated tools') + '"><div class="et-wn-list-head">'
+			+ (latest ? 'Latest notes' : groups.length + ' tools updated') + '</div>';
+		groups.forEach((group, index) => {
+			html += '<button type="button" class="et-wn-item' + (index ? '' : ' et-wn-picked') + '" data-et-pick="' + index
+				+ '" aria-pressed="' + (index ? 'false' : 'true') + '"><span class="et-wn-tile" data-et-icon="' + index + '"></span>'
+				+ '<span class="et-wn-item-text"><span class="et-wn-item-name">' + escapeHtml(group.name) + '</span>'
+				+ '<span class="et-wn-item-sub">' + escapeHtml(notesLines(group, latest).item) + '</span></span>'
+				+ (group.isNew ? '<span class="et-wn-new">New</span>' : '') + '</button>';
+		});
+		html += '</nav>';
+	}
+	html += '<div class="et-wn-panes">';
+	groups.forEach((group, index) => {
+		html += '<section class="et-wn-pane" data-et-pane="' + index + '"' + (index ? ' hidden' : '') + '>'
+			+ '<div class="et-wn-head"><span class="et-wn-tile et-wn-tile-big" data-et-icon="' + index + '"></span>'
+			+ '<div class="et-wn-head-text"><div class="et-wn-title-row"><h2 class="et-wn-name">' + escapeHtml(group.name) + '</h2>'
+			+ (group.isNew ? '<span class="et-wn-badge">New tool</span>' : '') + '</div>'
+			+ '<p class="et-wn-summary">' + escapeHtml(notesLines(group, latest).summary) + '</p></div></div>';
+		if (group.isNew && group.description) html += '<p class="et-wn-desc">' + escapeHtml(group.description) + '</p>';
+		if (group.off) {
+			html += '<div class="et-wn-off"><span class="et-wn-dot"></span><span class="et-wn-off-text">Off on this computer</span>'
+				+ '<button type="button" class="et-btn et-btn-primary et-wn-switch" data-et-switch="' + index + '">'
+				+ svgMarkup('power') + 'Switch it on</button></div>';
+		}
+		for (const entry of group.entries) html += noteEntryHtml(entry);
+		if (group.more) html += '<p class="et-wn-more">And ' + group.more + ' older version' + (group.more === 1 ? '' : 's') + '.</p>';
+		html += '</section>';
+	});
+	return html + '</div></div>';
+}
+
+// Previous, which tool of how many, and Next, for the left of the window's button bar.
+function notesNavHtml(count) {
+	return '<div class="et-wn-nav"><button type="button" class="et-btn et-wn-prev" disabled>' + svgMarkup('back')
+		+ 'Previous</button><span class="et-wn-count" aria-live="polite">1 of ' + count + '</span>'
+		+ '<button type="button" class="et-btn et-wn-next"' + (count > 1 ? '' : ' disabled') + '>Next'
+		+ svgMarkup('forward') + '</button></div>';
+}
+
+// A tool's icon in the window: EmbodyTools' own, or the one its row on the Tools tab shows.
+function fillNotesTile(tile, group) {
+	if (!group) return;
+	if (group.id === OWN_NOTES_ID) {
+		const img = document.createElement('img');
+		img.className = 'et-own-icon';
+		img.alt = '';
+		img.draggable = false;
+		img.src = ICON;
+		tile.appendChild(img);
+		return;
+	}
+	const descriptor = registry.find((d) => d.id === group.id) || { id: group.id, name: group.name };
+	const lineIcon = (into) => {
+		into.textContent = '';
+		const icon = toolIcon(descriptor);
+		if (icon) into.appendChild(svgIcon(icon));
+		else into.textContent = String(group.name)[0] || '?';
+	};
+	const own = ownIconNode(descriptor, lineIcon);
+	if (own) tile.appendChild(own);
+	else lineIcon(tile);
+}
+
+// Switch it on, in the window: as the switch on the tool's row does, then what came of it.
+async function switchOnFromNotes(strip, button, group) {
+	const text = strip.querySelector('.et-wn-off-text');
+	button.disabled = true;
+	text.textContent = 'Switching it on...';
+	let failed = false;
+	try {
+		await setEnabled(group.id, true);
+	} catch (error) {
+		failed = true;
+		complain('could not switch on ' + group.id + ' from What\'s new', error);
+	}
+	redrawPanels();
+	const state = stateOf(group.id);
+	button.remove();
+	if (!failed && state.status === 'on') {
+		group.off = false;
+		strip.classList.add('et-wn-is-on');
+		text.textContent = 'On now';
+	} else {
+		strip.classList.add('et-wn-failed');
+		text.textContent = 'It didn\'t start' + (state.detail ? ': ' + state.detail : '. The Tools tab says why.');
+	}
+}
+
+/*
+ * The window itself. `on_close` runs once, however it's closed. `options.latest`: the What's new
+ * button's window, every tool's newest notes rather than what's new since the last look.
+ */
+function showNotesDialog(groups, on_close, options) {
+	const latest = !!(options && options.latest);
+	const many = groups.length > 1;
+	const html = notesHtml(groups, { latest });
 	let closed = false;
+	let picked = 0;
+	let root = null;
+	let nav = null;
+
+	// Tool `index`: its row picked in the list, its notes the ones showing, and the count to match.
+	const pick = (index, focus) => {
+		if (!root) return;
+		picked = Math.max(0, Math.min(groups.length - 1, index));
+		for (const item of root.querySelectorAll('[data-et-pick]')) {
+			const on = Number(item.dataset.etPick) === picked;
+			item.classList.toggle('et-wn-picked', on);
+			item.setAttribute('aria-pressed', on ? 'true' : 'false');
+			if (on) {
+				item.scrollIntoView({ block: 'nearest' });
+				if (focus) item.focus();
+			}
+		}
+		for (const pane of root.querySelectorAll('[data-et-pane]')) pane.hidden = Number(pane.dataset.etPane) !== picked;
+		const panes = root.querySelector('.et-wn-panes');
+		if (panes) panes.scrollTop = 0;
+		if (nav) {
+			nav.querySelector('.et-wn-count').textContent = (picked + 1) + ' of ' + groups.length;
+			nav.querySelector('.et-wn-prev').disabled = picked === 0;
+			nav.querySelector('.et-wn-next').disabled = picked === groups.length - 1;
+		}
+	};
+	// Enter and Space press the window's own buttons, where Blockbench's Enter would close it.
+	const ownKeys = (node) => node.addEventListener('keydown', (event) => {
+		if (event.key === 'Enter' || event.key === ' ') event.stopPropagation();
+	});
+	const STEPS = { ArrowDown: 1, ArrowUp: -1 };
+
 	const dialog = new Dialog({
 		id: 'embodytools_whats_new',
 		title: 'What\'s new in EmbodyTools',
-		width: 680,
+		width: many ? 680 : 560,
 		buttons: ['Got it'],
 		notes: groups,
+		latest: latest,
 		component: {
-			template: '<div class="et-notes"></div>',
-			mounted() { this.$el.innerHTML = html; },
+			template: '<div class="et-wn"></div>',
+			mounted() {
+				root = this.$el;
+				root.innerHTML = html;
+				for (const tile of root.querySelectorAll('[data-et-icon]')) fillNotesTile(tile, groups[Number(tile.dataset.etIcon)]);
+				for (const item of root.querySelectorAll('[data-et-pick]')) {
+					const index = Number(item.dataset.etPick);
+					item.addEventListener('click', () => pick(index));
+					// Up and Down go through the list from the tool in focus, Home and End to its ends.
+					item.addEventListener('keydown', (event) => {
+						const to = Object.prototype.hasOwnProperty.call(STEPS, event.key) ? index + STEPS[event.key]
+							: event.key === 'Home' ? 0 : event.key === 'End' ? groups.length - 1 : null;
+						if (to === null) return;
+						event.preventDefault();
+						event.stopPropagation();
+						pick(to, true);
+					});
+					ownKeys(item);
+				}
+				for (const button of root.querySelectorAll('[data-et-switch]')) {
+					const group = groups[Number(button.dataset.etSwitch)];
+					button.addEventListener('click', () => {
+						switchOnFromNotes(button.closest('.et-wn-off'), button, group)
+							.catch((error) => complain('What\'s new could not say how switching on ' + group.id + ' went', error));
+					});
+					ownKeys(button);
+				}
+			},
+		},
+		// Previous and Next go at the left of Blockbench's own button bar, beside Got it.
+		onBuild(object) {
+			const bar = many && object ? object.querySelector('.dialog_bar.button_bar') : null;
+			if (!bar) return;
+			const holder = document.createElement('div');
+			holder.innerHTML = notesNavHtml(groups.length);
+			nav = holder.firstChild;
+			const prev = nav.querySelector('.et-wn-prev');
+			const next = nav.querySelector('.et-wn-next');
+			// At either end the button pressed goes grey, so the other one takes the focus.
+			prev.addEventListener('click', () => { pick(picked - 1); if (prev.disabled) next.focus(); });
+			next.addEventListener('click', () => { pick(picked + 1); if (next.disabled) prev.focus(); });
+			ownKeys(prev);
+			ownKeys(next);
+			bar.insertBefore(nav, bar.firstChild);
 		},
 		// One button is both confirm and cancel, and onButton follows either.
 		onButton() {
@@ -3559,7 +3856,7 @@ async function showLatestNotes() {
 		Blockbench.showQuickMessage(team.state === 'online' ? 'No release notes to show yet' : 'Sign in to see the team tools\' release notes');
 		return null;
 	}
-	return showNotesDialog(groups, () => markNotesSeen(groups));
+	return showNotesDialog(groups, () => markNotesSeen(groups), { latest: true });
 }
 
 // ===========================================================================
@@ -3606,6 +3903,16 @@ const ICON_PATHS = {
 	saved: '<path d="M12 4.5v9"/><path d="M8 10l4 4 4-4"/><path d="M5 15.5V18a1.5 1.5 0 0 0 1.5 1.5h11A1.5 1.5 0 0 0 19 18v-2.5"/>',
 	copy: '<rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5V6A1.5 1.5 0 0 0 14 4.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5"/>',
 	check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+	// The What's new window: the parts of a release's notes, How to use, Switch it on, and
+	// Previous and Next.
+	swap: '<path d="M4 8h14"/><path d="M15 5l3 3-3 3"/><path d="M20 16H6"/><path d="M9 13l-3 3 3 3"/>',
+	wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+	minus: '<path d="M5 12h14"/>',
+	dot: '<circle cx="12" cy="12" r="3"/>',
+	bulb: '<path d="M9 18h6"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 0-3.6 10.8c.7.5 1.1 1.3 1.1 2.2h5c0-.9.4-1.7 1.1-2.2A6 6 0 0 0 12 3z"/>',
+	power: '<path d="M12 3v8"/><path d="M6.3 7.2a8 8 0 1 0 11.4 0"/>',
+	back: '<path d="M15 6l-6 6 6 6"/>',
+	forward: '<path d="M9 6l6 6-6 6"/>',
 };
 
 // Each team tool's icon, and the outside tools'. A tool not listed here gets one from its tags.
@@ -3630,11 +3937,13 @@ const TAG_ICONS = [['format', 'cube'], ['uv', 'uv'], ['transform', 'stretch'], [
 const TOOL_ICON_NAMES = new Set(['stretch', 'layers', 'lock', 'gradient', 'drop', 'board', 'sun', 'uv', 'cube', 'globe', 'brush',
 	'scene', 'keyframes', 'octagon', 'figure']);
 
+const SVG_OPEN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"'
+	+ ' stroke-linejoin="round" aria-hidden="true" focusable="false">';
+
 function svgIcon(name, className, tag) {
 	const node = document.createElement(tag || 'span');
 	node.className = 'et-svg' + (className ? ' ' + className : '');
-	node.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"'
-		+ ' stroke-linejoin="round" aria-hidden="true" focusable="false">' + (ICON_PATHS[name] || '') + '</svg>';
+	node.innerHTML = SVG_OPEN + (ICON_PATHS[name] || '') + '</svg>';
 	return node;
 }
 
@@ -4293,20 +4602,155 @@ const BROWSER_CSS = `
 
 #et_page_tab { cursor: pointer; }
 
-/* What's new, after an update. */
-.et-notes { max-height: 62vh; overflow-y: auto; padding: 4px 4px 12px 4px; }
-.et-notes-tool { margin-bottom: 18px; }
-.et-notes-tool h2 { font-size: 17px; margin: 0 0 6px 0; display: flex; align-items: center; gap: 8px; }
-.et-notes-tool h3 { font-size: 14px; margin: 12px 0 4px 0; color: var(--color-text); }
-.et-notes-tool h4 { font-size: 12px; margin: 8px 0 2px 0; color: var(--color-subtle_text); text-transform: uppercase; letter-spacing: .04em; }
-.et-notes-tool h4.et-notes-how { color: var(--color-accent); }
-.et-notes-tool ul { margin: 0 0 0 18px; padding: 0; }
-.et-notes-tool li { margin: 2px 0; line-height: 1.45; list-style: disc; }
-.et-notes-note { margin: 2px 0 6px 0; font-size: 12px; color: var(--color-subtle_text); }
-.et-notes-badge {
-	font-size: 11px; padding: 1px 7px; border-radius: 9px;
-	background: var(--color-accent); color: var(--color-accent_text);
+/*
+ * What's new (showNotesDialog): the tools down the left, the picked one's notes on the right,
+ * and Previous and Next beside Got it in Blockbench's own button bar. Each part of a release
+ * has a hue, mixed with the theme's light text so it reads on a dark theme and a light one.
+ */
+dialog#embodytools_whats_new {
+	--et-wn-muted: color-mix(in srgb, var(--color-subtle_text) 65%, var(--color-text));
+	--et-wn-line: color-mix(in srgb, var(--color-button) 70%, var(--color-ui));
+	--et-wn-added: color-mix(in srgb, #3ec46d 55%, var(--color-light));
+	--et-wn-changed: color-mix(in srgb, #9b6cf0 55%, var(--color-light));
+	--et-wn-fixed: color-mix(in srgb, #e6a817 55%, var(--color-light));
+	--et-wn-removed: color-mix(in srgb, #e5534b 55%, var(--color-light));
+	--et-wn-how: color-mix(in srgb, var(--color-accent) 55%, var(--color-light));
 }
+dialog#embodytools_whats_new .dialog_content { margin: 0; }
+dialog#embodytools_whats_new .dialog_bar.button_bar {
+	align-items: center; gap: 8px; margin: 0; padding: 12px 16px; border-top: 1px solid var(--et-wn-line);
+}
+dialog#embodytools_whats_new .dialog_bar.button_bar > button.confirm_btn,
+dialog#embodytools_whats_new .dialog_bar.button_bar > button.confirm_btn:hover {
+	border-radius: 8px; box-shadow: none; background: var(--color-accent); color: var(--color-accent_text); font-weight: 600;
+}
+dialog#embodytools_whats_new .dialog_bar.button_bar > button.confirm_btn:hover { filter: brightness(1.08); }
+.et-wn { color: var(--color-text); font-size: 13.5px; line-height: 1.5; }
+.et-wn-body { display: flex; height: min(520px, calc(100vh - 190px)); }
+.et-wn-body.et-wn-single { height: auto; max-height: min(600px, calc(100vh - 190px)); }
+
+/* The list of tools. */
+.et-wn-list {
+	flex: none; display: flex; flex-direction: column; gap: 2px; width: 208px; padding: 12px 8px; box-sizing: border-box;
+	overflow-y: auto; background: var(--color-back); border-right: 1px solid var(--et-wn-line);
+}
+.et-wn-list-head {
+	padding: 2px 10px 8px; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+	color: var(--et-wn-muted);
+}
+.et-wn-item {
+	flex: none; display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; height: auto; min-height: 52px;
+	margin: 0; padding: 8px 10px; box-sizing: border-box; border: none; border-radius: 7px; box-shadow: none;
+	background: transparent; color: var(--color-text); font-size: 13.5px; font-weight: normal; line-height: 1.35;
+	text-align: left; text-decoration: none; cursor: pointer;
+}
+.et-wn-item:hover { background: color-mix(in srgb, var(--color-selected) 50%, transparent); color: var(--color-text); }
+.et-wn-item.et-wn-picked, .et-wn-item.et-wn-picked:hover { background: var(--color-selected); color: var(--color-light); }
+.et-wn-item:focus { text-decoration: none; }
+.et-wn-item:focus-visible { outline: 1px solid var(--color-accent); outline-offset: -1px; }
+.et-wn-item-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.et-wn-item-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-weight: 600; }
+.et-wn-item-sub { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; color: var(--et-wn-muted); }
+.et-wn-new, .et-wn-badge {
+	flex: none; padding: 0 7px; border-radius: 9px; background: var(--color-accent); color: var(--color-accent_text);
+	font-size: 11px; font-weight: 700; line-height: 18px;
+}
+
+/* A tool's icon in its tile (fillNotesTile): its own picture, one Blockbench draws, or a line icon. */
+.et-wn-tile {
+	flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 8px; overflow: hidden;
+	background: var(--color-elevated); color: var(--et-wn-muted); font-size: 14px; font-weight: 700; text-transform: uppercase;
+}
+.et-wn-tile img.et-own-icon { display: block; width: 72%; height: 72%; object-fit: contain; }
+.et-wn-tile img.et-own-icon.et-pixelated { image-rendering: pixelated; }
+.et-wn-tile .et-svg { width: 18px; height: 18px; }
+.et-wn-tile .et-own-icon:not(img) {
+	width: auto; max-width: none; height: auto; margin: 0; padding: 0;
+	font-size: 19px; line-height: 1; text-transform: none; color: inherit;
+}
+.et-wn-tile-big { width: 48px; height: 48px; border-radius: 11px; background: var(--color-back); font-size: 20px; }
+.et-wn-tile-big .et-svg { width: 26px; height: 26px; }
+.et-wn-tile-big .et-own-icon:not(img) { font-size: 28px; }
+
+/* The picked tool's notes. */
+.et-wn-panes { flex: 1; min-width: 0; overflow-y: auto; }
+.et-wn-pane { padding: 18px 22px 22px; }
+.et-wn-pane[hidden] { display: none; }
+.et-wn-head { display: flex; align-items: center; gap: 14px; padding-bottom: 16px; }
+.et-wn-head-text { flex: 1; min-width: 0; }
+.et-wn-title-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.et-wn h2.et-wn-name {
+	margin: 0; font-family: var(--font-headline); font-size: 18px; font-weight: 600; line-height: 1.3; color: var(--color-light);
+}
+.et-wn-summary { margin: 2px 0 0; font-size: 12.5px; color: var(--et-wn-muted); }
+.et-wn-desc { margin: 0 0 12px; }
+.et-wn-off {
+	display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin: 0 0 16px; padding: 8px 8px 8px 12px;
+	border-radius: 8px; background: var(--color-back);
+}
+.et-wn-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--color-subtle_text); }
+.et-wn-off-text { flex: 1 1 160px; min-width: 0; display: flex; align-items: center; min-height: 32px; }
+.et-wn-off.et-wn-is-on .et-wn-dot { background: var(--et-wn-added); }
+.et-wn-off.et-wn-failed .et-wn-dot { background: var(--et-wn-removed); }
+
+/* One release, and its parts. */
+.et-wn-version { display: flex; flex-direction: column; gap: 12px; padding: 16px 0 6px; border-top: 1px solid var(--et-wn-line); }
+.et-wn-vhead { display: flex; align-items: baseline; gap: 10px; }
+.et-wn-pill {
+	flex: none; padding: 1px 8px; border-radius: 9px; background: var(--color-button); color: var(--color-light);
+	font-family: var(--font-headline); font-size: 11.5px; font-weight: 600;
+}
+.et-wn h3.et-wn-vtitle, .et-wn-vtitle {
+	flex: 1; min-width: 0; margin: 0; font-family: inherit; font-size: 14.5px; font-weight: 600; line-height: 1.35;
+	color: var(--color-light);
+}
+.et-wn-date { flex: none; font-size: 12px; color: var(--et-wn-muted); }
+.et-wn-how {
+	display: flex; gap: 10px; padding: 10px 12px; border-radius: 8px;
+	background: color-mix(in srgb, var(--color-accent) 14%, transparent); color: var(--color-light);
+}
+.et-wn-how > .et-svg { width: 18px; height: 18px; margin-top: 2px; color: var(--et-wn-how); }
+.et-wn-how-text { flex: 1; min-width: 0; }
+.et-wn-how-label, .et-wn-cat-label { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.et-wn-how-label { color: var(--et-wn-how); }
+.et-wn-cat { display: flex; flex-direction: column; gap: 4px; }
+.et-wn-cat-head { display: flex; align-items: center; gap: 8px; }
+.et-wn-cat-icon {
+	flex: none; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%;
+	background: var(--color-button); color: var(--et-wn-muted);
+}
+.et-wn-cat-icon .et-svg { width: 12px; height: 12px; }
+.et-wn-cat-icon svg { stroke-width: 2.4; }
+.et-wn-cat-label { color: var(--et-wn-muted); }
+.et-wn-added .et-wn-cat-icon { background: color-mix(in srgb, #3ec46d 20%, transparent); }
+.et-wn-changed .et-wn-cat-icon { background: color-mix(in srgb, #9b6cf0 22%, transparent); }
+.et-wn-fixed .et-wn-cat-icon { background: color-mix(in srgb, #e6a817 20%, transparent); }
+.et-wn-removed .et-wn-cat-icon { background: color-mix(in srgb, #e5534b 20%, transparent); }
+.et-wn-added .et-wn-cat-icon, .et-wn-added .et-wn-cat-label { color: var(--et-wn-added); }
+.et-wn-changed .et-wn-cat-icon, .et-wn-changed .et-wn-cat-label { color: var(--et-wn-changed); }
+.et-wn-fixed .et-wn-cat-icon, .et-wn-fixed .et-wn-cat-label { color: var(--et-wn-fixed); }
+.et-wn-removed .et-wn-cat-icon, .et-wn-removed .et-wn-cat-label { color: var(--et-wn-removed); }
+.et-wn-lines { margin: 0; padding: 0 0 0 30px; list-style: none; }
+.et-wn-how .et-wn-lines { margin-top: 2px; padding-left: 0; }
+.et-wn-how .et-wn-lines.et-wn-many { padding-left: 12px; }
+.et-wn-lines li { position: relative; margin: 0; list-style: none; }
+.et-wn-lines li + li { margin-top: 6px; }
+.et-wn-lines.et-wn-many li::before {
+	content: ''; position: absolute; left: -11px; top: .62em; width: 4px; height: 4px; border-radius: 50%;
+	background: var(--et-wn-muted);
+}
+.et-wn-lines code {
+	padding: 0 4px; border-radius: 3px; border: 1px solid var(--color-border); background: var(--color-back);
+	font-family: var(--font-code); font-size: .92em;
+}
+.et-wn-lines a { color: var(--color-accent); }
+.et-wn-more { margin: 14px 0 0; font-size: 12px; color: var(--et-wn-muted); }
+
+/* Previous, which tool of how many, and Next, at the left of the button bar. */
+.et-wn-nav { display: flex; align-items: center; gap: 6px; margin-right: auto; }
+.et-wn-nav .et-btn { gap: 4px; padding: 0 12px 0 8px; }
+.et-wn-nav .et-btn.et-wn-next { padding: 0 8px 0 12px; }
+.et-wn-count { min-width: 56px; text-align: center; font-size: 12.5px; color: var(--et-wn-muted); }
 `;
 
 /*

@@ -2,6 +2,26 @@
 
 Generated from `changelog.json` by `scripts/changelog.mjs`. Edit that file, not this one.
 
+## v3.5.0 - What's new, redone, with Brush Tuna and Grayscale Preview
+
+_2026-10-05_
+
+### How to use
+
+- Brush Tuna and Grayscale Preview are at the bottom of the Tools tab, with the other outside tools. Switch them on there.
+- Grayscale Preview turns on and off in View > Grayscale Preview. Brush Tuna works in the paint brush's Brush Presets.
+
+### Added
+
+- Brush Tuna, by SnaveSutit and Embody Games, from Blockbench's store: pen pressure settings and curves for each brush preset, [ and ] to switch between presets, and a clearer list of them.
+- Grayscale Preview, by JannisX11, from Blockbench's store: shows the model and the UV editor in grayscale, to check values and contrast without the colours.
+- What's new has a Switch it on button for a tool that's switched off on your computer.
+
+### Changed
+
+- What's new has a new look: the tools that updated are listed on the left, and the one you pick shows its notes on the right, with Added, Changed and Fixed in their own colours and Previous and Next at the bottom. A single tool's notes show on their own.
+- Outside tools now start the way Blockbench starts a plugin, so the ones that need that, such as Brush Tuna, work under EmbodyTools. They still never show in Blockbench's plugin list.
+
 ## v3.4.0 - Hytale Models' newer builds
 
 _2026-10-04_
