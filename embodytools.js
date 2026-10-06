@@ -48,7 +48,7 @@ const PLUGIN_ID = 'embodytools';
 // Bumped on every deploy during testing, so the plugin page shows at a glance whether the
 // running copy is the latest file. If the page does not say this number, Blockbench is
 // reading some other file.
-const PLUGIN_VERSION = '3.5.0';
+const PLUGIN_VERSION = '3.5.1';
 const TAG = '[embodytools]';
 
 /*
@@ -3438,9 +3438,9 @@ async function fetchTeamNotes() {
 }
 
 /*
- * What the window would show: [{ id, name, entries, more, isNew, description, off }],
- * EmbodyTools first, then the team tools in the list's order. `team_notes` null is notes
- * that couldn't be read this time.
+ * What's new since the last look, the tools the window marks New and lists first (notesGroups):
+ * [{ id, name, entries, more, isNew, description, off }], EmbodyTools first, then the team
+ * tools in the list's order. `team_notes` null is notes that couldn't be read this time.
  */
 function newNotes(seen, own, team_notes) {
 	const groups = [];
@@ -3504,9 +3504,11 @@ function noteLine(text) {
 /*
  * The window, as David picked it from four designs (2026-10-05): the tools down the left, the
  * picked one's notes on the right, and Previous and Next beside Got it, so it keeps its size
- * however many tools updated. A single tool gets its notes alone. Each part of a release gets
- * a colour and an icon by its title (NOTE_KINDS), How to use comes first in a box of its own,
- * and a tool that's switched off on this computer says so, with a button that switches it on.
+ * whichever tool is picked. Since 3.5.1 it lists every tool, the ones with news first and marked
+ * New, the rest with their newest notes (David: one tool's notes alone, with no list, wasn't
+ * what he wanted). Each part of a release gets a colour and an icon by its title (NOTE_KINDS),
+ * How to use comes first in a box of its own, and a tool that's switched off on this computer
+ * says so, with a button that switches it on.
  */
 const NOTE_KINDS = [
 	{ kind: 'added', icon: 'sparkle', titles: ['added', 'new'] },
@@ -3542,13 +3544,14 @@ const svgMarkup = (name) => '<span class="et-svg" aria-hidden="true">' + SVG_OPE
 
 /*
  * What the window says about a tool: `item`, under its name in the list, and `summary`, under
- * its name over its notes. `latest` is the What's new button's window, every tool's newest notes.
+ * its name over its notes. A tool with news says what changed since the last look; any other
+ * just has its newest notes.
  */
-function notesLines(group, latest) {
+function notesLines(group) {
 	const newest = group.entries[0] || { version: '', date: '' };
 	const count = group.entries.length + (group.more || 0);
 	const when = newest.date ? noteDate(newest.date, true) : '';
-	if (latest) return { item: newest.version, summary: 'Version ' + newest.version + (when ? ', released ' + when : '') };
+	if (!group.news) return { item: newest.version, summary: 'Version ' + newest.version + (when ? ', released ' + when : '') };
 	if (group.isNew) return { item: newest.version, summary: 'New on your list, version ' + newest.version };
 	if (count > 1) {
 		return { item: newest.version + ', ' + count + ' updates', summary: count + ' updates, up to ' + newest.version + (when ? ' on ' + when : '') };
@@ -3577,34 +3580,34 @@ function noteEntryHtml(entry) {
 }
 
 /*
- * The window's contents: the list of tools when there's more than one, and each tool's notes,
- * all but the first hidden until picked. Every piece of text from the notes is escaped or
- * cleaned, and the tiles are filled with each tool's icon once it's mounted (fillNotesTile).
+ * The window's contents: the list of tools down the left, and each tool's notes, all but the
+ * first hidden until picked. The tools with news come first (notesGroups), each marked New,
+ * under how many updated, and every other tool after them under Other tools, as David asked
+ * (2026-10-05); with no news at all, the list is just Latest notes. Every piece of text from
+ * the notes is escaped or cleaned, and the tiles are filled with each tool's icon once it's
+ * mounted (fillNotesTile).
  * No <header> here: Blockbench styles every header as its own title bar.
  */
-function notesHtml(groups, options) {
-	const latest = !!(options && options.latest);
-	const many = groups.length > 1;
-	let html = '<div class="et-wn-body' + (many ? '' : ' et-wn-single') + '">';
-	if (many) {
-		html += '<nav class="et-wn-list" aria-label="' + (latest ? 'Tools' : 'Updated tools') + '"><div class="et-wn-list-head">'
-			+ (latest ? 'Latest notes' : groups.length + ' tools updated') + '</div>';
-		groups.forEach((group, index) => {
-			html += '<button type="button" class="et-wn-item' + (index ? '' : ' et-wn-picked') + '" data-et-pick="' + index
-				+ '" aria-pressed="' + (index ? 'false' : 'true') + '"><span class="et-wn-tile" data-et-icon="' + index + '"></span>'
-				+ '<span class="et-wn-item-text"><span class="et-wn-item-name">' + escapeHtml(group.name) + '</span>'
-				+ '<span class="et-wn-item-sub">' + escapeHtml(notesLines(group, latest).item) + '</span></span>'
-				+ (group.isNew ? '<span class="et-wn-new">New</span>' : '') + '</button>';
-		});
-		html += '</nav>';
-	}
-	html += '<div class="et-wn-panes">';
+function notesHtml(groups) {
+	const news = groups.filter((group) => group.news).length;
+	const head = (text) => '<div class="et-wn-list-head">' + text + '</div>';
+	let html = '<div class="et-wn-body"><nav class="et-wn-list" aria-label="Tools">';
+	groups.forEach((group, index) => {
+		if (!index) html += head(news ? news + (news === 1 ? ' tool updated' : ' tools updated') : 'Latest notes');
+		else if (index === news) html += head('Other tools');
+		html += '<button type="button" class="et-wn-item' + (index ? '' : ' et-wn-picked') + '" data-et-pick="' + index
+			+ '" aria-pressed="' + (index ? 'false' : 'true') + '"><span class="et-wn-tile" data-et-icon="' + index + '"></span>'
+			+ '<span class="et-wn-item-text"><span class="et-wn-item-name">' + escapeHtml(group.name) + '</span>'
+			+ '<span class="et-wn-item-sub">' + escapeHtml(notesLines(group).item) + '</span></span>'
+			+ (group.news ? '<span class="et-wn-new">New</span>' : '') + '</button>';
+	});
+	html += '</nav><div class="et-wn-panes">';
 	groups.forEach((group, index) => {
 		html += '<section class="et-wn-pane" data-et-pane="' + index + '"' + (index ? ' hidden' : '') + '>'
 			+ '<div class="et-wn-head"><span class="et-wn-tile et-wn-tile-big" data-et-icon="' + index + '"></span>'
 			+ '<div class="et-wn-head-text"><div class="et-wn-title-row"><h2 class="et-wn-name">' + escapeHtml(group.name) + '</h2>'
 			+ (group.isNew ? '<span class="et-wn-badge">New tool</span>' : '') + '</div>'
-			+ '<p class="et-wn-summary">' + escapeHtml(notesLines(group, latest).summary) + '</p></div></div>';
+			+ '<p class="et-wn-summary">' + escapeHtml(notesLines(group).summary) + '</p></div></div>';
 		if (group.isNew && group.description) html += '<p class="et-wn-desc">' + escapeHtml(group.description) + '</p>';
 		if (group.off) {
 			html += '<div class="et-wn-off"><span class="et-wn-dot"></span><span class="et-wn-off-text">Off on this computer</span>'
@@ -3676,13 +3679,12 @@ async function switchOnFromNotes(strip, button, group) {
 }
 
 /*
- * The window itself. `on_close` runs once, however it's closed. `options.latest`: the What's new
- * button's window, every tool's newest notes rather than what's new since the last look.
+ * The window itself. `on_close` runs once, however it's closed. `options.latest`: opened with
+ * the What's new button rather than at the first model, which the window looks the same for.
  */
 function showNotesDialog(groups, on_close, options) {
 	const latest = !!(options && options.latest);
-	const many = groups.length > 1;
-	const html = notesHtml(groups, { latest });
+	const html = notesHtml(groups);
 	let closed = false;
 	let picked = 0;
 	let root = null;
@@ -3719,7 +3721,7 @@ function showNotesDialog(groups, on_close, options) {
 	const dialog = new Dialog({
 		id: 'embodytools_whats_new',
 		title: 'What\'s new in EmbodyTools',
-		width: many ? 680 : 560,
+		width: 680,
 		buttons: ['Got it'],
 		notes: groups,
 		latest: latest,
@@ -3753,9 +3755,10 @@ function showNotesDialog(groups, on_close, options) {
 				}
 			},
 		},
-		// Previous and Next go at the left of Blockbench's own button bar, beside Got it.
+		// Previous and Next go at the left of Blockbench's own button bar, beside Got it. With one
+		// tool they're both grey, "1 of 1", so the window looks the same as with several.
 		onBuild(object) {
-			const bar = many && object ? object.querySelector('.dialog_bar.button_bar') : null;
+			const bar = object ? object.querySelector('.dialog_bar.button_bar') : null;
 			if (!bar) return;
 			const holder = document.createElement('div');
 			holder.innerHTML = notesNavHtml(groups.length);
@@ -3819,9 +3822,10 @@ async function lookForNews(generation) {
 	}
 	if (notes_done || !stillRunning(generation)) return;
 	// Again, in case the record changed while another dialog was open.
-	const groups = currentNews(own, team_notes);
-	if (!groups.length) return;
+	const news = currentNews(own, team_notes);
+	if (!news.length) return;
 	notes_done = !retry;
+	const groups = notesGroups(news, own, team_notes);
 	showNotesDialog(groups, () => markNotesSeen(groups));
 }
 
@@ -3837,21 +3841,32 @@ function onProjectSelected() {
 	}, NOTES_DELAY_MS);
 }
 
-// The What's new button: the latest notes of EmbodyTools and every team tool, any time.
-async function showLatestNotes() {
-	const [own, team_notes] = await Promise.all([fetchOwnNotes(), fetchTeamNotes()]);
-	const groups = [];
+/*
+ * Every tool in the window: those with news first, as `news` (currentNews) has them and marked
+ * as news, then every other tool with its newest notes, EmbodyTools first and the team's in the
+ * list's order. The same at the first model and from the What's new button.
+ */
+function notesGroups(news, own, team_notes) {
+	const groups = news.map((group) => Object.assign({}, group, { news: true }));
+	const listed = new Set(groups.map((group) => group.id));
 	const current = own.filter((entry) => compareVersions(entry.version, PLUGIN_VERSION) <= 0);
-	if (current.length) groups.push({ id: OWN_NOTES_ID, name: 'EmbodyTools', entries: current.slice(0, 1), more: 0 });
+	if (current.length && !listed.has(OWN_NOTES_ID)) groups.push({ id: OWN_NOTES_ID, name: 'EmbodyTools', entries: current.slice(0, 1), more: 0 });
 	if (team_notes) {
 		const enabled = readEnabled();
 		for (const descriptor of team.list) {
 			const entries = team_notes.get(descriptor.id);
-			if (entries && entries.length) {
+			if (entries && entries.length && !listed.has(descriptor.id)) {
 				groups.push({ id: descriptor.id, name: descriptor.name || descriptor.id, entries: entries.slice(0, 1), more: 0, off: !enabled.has(descriptor.id) });
 			}
 		}
 	}
+	return groups;
+}
+
+// The What's new button: every tool's notes any time, what's new since the last look first.
+async function showLatestNotes() {
+	const [own, team_notes] = await Promise.all([fetchOwnNotes(), fetchTeamNotes()]);
+	const groups = notesGroups(currentNews(own, team_notes), own, team_notes);
 	if (!groups.length) {
 		Blockbench.showQuickMessage(team.state === 'online' ? 'No release notes to show yet' : 'Sign in to see the team tools\' release notes');
 		return null;
@@ -4627,7 +4642,6 @@ dialog#embodytools_whats_new .dialog_bar.button_bar > button.confirm_btn:hover {
 dialog#embodytools_whats_new .dialog_bar.button_bar > button.confirm_btn:hover { filter: brightness(1.08); }
 .et-wn { color: var(--color-text); font-size: 13.5px; line-height: 1.5; }
 .et-wn-body { display: flex; height: min(520px, calc(100vh - 190px)); }
-.et-wn-body.et-wn-single { height: auto; max-height: min(600px, calc(100vh - 190px)); }
 
 /* The list of tools. */
 .et-wn-list {
@@ -4635,9 +4649,10 @@ dialog#embodytools_whats_new .dialog_bar.button_bar > button.confirm_btn:hover {
 	overflow-y: auto; background: var(--color-back); border-right: 1px solid var(--et-wn-line);
 }
 .et-wn-list-head {
-	padding: 2px 10px 8px; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+	flex: none; padding: 2px 10px 8px; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
 	color: var(--et-wn-muted);
 }
+.et-wn-item + .et-wn-list-head { margin-top: 12px; }
 .et-wn-item {
 	flex: none; display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; height: auto; min-height: 52px;
 	margin: 0; padding: 8px 10px; box-sizing: border-box; border: none; border-radius: 7px; box-shadow: none;

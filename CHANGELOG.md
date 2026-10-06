@@ -2,6 +2,15 @@
 
 Generated from `changelog.json` by `scripts/changelog.mjs`. Edit that file, not this one.
 
+## v3.5.1 - What's new lists every tool
+
+_2026-10-05_
+
+### Changed
+
+- What's new lists every tool now. The ones with something new since you last looked come first, marked New, and every other tool follows under Other tools with its latest notes.
+- The window looks the same however many tools have news, with the list on the left even for one. The What's new button on the Tools tab opens it the same way.
+
 ## v3.5.0 - What's new, redone, with Brush Tuna and Grayscale Preview
 
 _2026-10-05_
