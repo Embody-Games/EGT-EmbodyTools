@@ -28,6 +28,19 @@ Run `npm test`, every time, a change to `loader/registry.json` included. A push 
 
 Bump by what changed: `patch` for a fix, `minor` for something new, `major` for a change in how people use it. The version only ever moves forward, and the release script refuses one that isn't newer than the last tag.
 
+## Writing the release notes
+
+The `changelog.json` entry is everything people read about a release: EmbodyTools' What's new window, the Discord post, the GitHub release and `CHANGELOG.md` all show it. Write it for the people who use EmbodyTools, not for programmers: every line should make sense to a 12-year-old who uses Blockbench and has never seen the code.
+
+- Say what changed for them, in everyday words. "What's new now shows all your tools" works, "the window builds its list with notesGroups" doesn't.
+- Call things what Blockbench and EmbodyTools call them on screen: the Tools tab, the What's new button, File > Plugins. No names from the code.
+- One change per line, in one or two short sentences. No em dashes, no hype.
+- When a line is about one tool, name the tool.
+- For a fix, say what went wrong, the way people noticed it, then that it's fixed. For something new, say what it does for them, and add a How to use line (`--how`) saying where to find it.
+- Categories, in this order: How to use, Added, Changed, Fixed, Removed, Safeguards. Leave out the empty ones.
+
+The team tools' plugin guide, `EMBODYTOOLS_PLUGIN_GUIDE.md`, has the full rules under "Writing release notes people understand". An entry can be reworded later without a new version: change its text in `changelog.json`, run `npm run changelog` and `npm test`, and push it as a plain commit. Never change a version number or a date.
+
 ## Changes that aren't a release
 
 `loader/registry.json`, the README and the scripts take a plain commit and push, with no version or tag, and `npm test` before the push. A change to `loader/registry.json` reaches everyone at their next start.
