@@ -2,6 +2,20 @@
 
 Generated from `changelog.json` by `scripts/changelog.mjs`. Edit that file, not this one.
 
+## v3.6.0 - Tools ready as soon as Blockbench opens
+
+_2026-10-20_
+
+### Changed
+
+- Your tools start from the copy saved on your computer, so they're ready as soon as Blockbench opens instead of 5 to 10 seconds later.
+- A model opened while your tools are still starting waits for them, never more than 10 seconds.
+- EmbodyTools still looks for a newer version of each tool when Blockbench opens, and swaps it in. If a model is already open by then, the tool's row on the Tools tab says Update at next start, and the new version runs the next time you open Blockbench.
+
+### Fixed
+
+- A Hytale model opened as Blockbench started, with a double-click or from the recent list, could come up as a Generic Model with Invalid Format, because Hytale Models wasn't on yet. Now it waits for your tools and opens the right way.
+
 ## v3.5.1 - What's new lists every tool
 
 _2026-10-05_

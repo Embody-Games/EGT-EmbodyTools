@@ -48,7 +48,7 @@ const PLUGIN_ID = 'embodytools';
 // Bumped on every deploy during testing, so the plugin page shows at a glance whether the
 // running copy is the latest file. If the page does not say this number, Blockbench is
 // reading some other file.
-const PLUGIN_VERSION = '3.5.1';
+const PLUGIN_VERSION = '3.6.0';
 const TAG = '[embodytools]';
 
 /*
@@ -820,18 +820,11 @@ async function fetchSource(descriptor) {
 		return { source: nodeFs.readFileSync(local, 'utf8'), origin: 'local file' };
 	}
 
-	// Another build of it, picked on its row: from that build's link, with a copy on disk of
-	// its own, so a copy of one build never runs as another.
-	const build = pickedBuild(descriptor);
-	const link = build ? build.url : descriptor.url;
-	const cache_name = descriptor.id + (build ? '@' + encodeURIComponent(build.name) : '') + '.js';
-
-	// Cache-busted, because the whole point is that pushing a new file reaches people. The
-	// disk cache is what makes an offline start work, not the HTTP cache.
-	const url = link + (link.includes('?') ? '&' : '?') + 'v=' + Date.now();
+	const { build, link, cache_name } = sourceOf(descriptor);
 
 	try {
-		const { response, text: source } = await fetchWithin(url);
+		// Asked for already at this start (requestEarly), or now.
+		const { response, text: source } = await (takeEarly(link) || fetchWithin(cacheBusted(link)));
 		if (!response.ok) throw new Error('HTTP ' + response.status);
 		// An outside link that redirects into the team's GitHub is still a team link.
 		if (isTeamLink(response.url)) throw new Error('its link leads to one of the team\'s repos, which never load from a link');
@@ -846,6 +839,61 @@ async function fetchSource(descriptor) {
 		}
 		throw error;
 	}
+}
+
+/*
+ * Where an outside tool's file comes from: its own link, or the build picked on its row, with a
+ * copy on disk for each build, so a copy of one build never runs as another.
+ */
+function sourceOf(descriptor) {
+	const build = pickedBuild(descriptor);
+	return {
+		build: build,
+		link: build ? build.url : descriptor.url,
+		cache_name: descriptor.id + (build ? '@' + encodeURIComponent(build.name) : '') + '.js',
+	};
+}
+
+// Cache-busted, because the whole point is that pushing a new file reaches people. The disk
+// cache is what makes an offline start work, not the HTTP cache.
+const cacheBusted = (link) => link + (link.includes('?') ? '&' : '?') + 'v=' + Date.now();
+
+// Read straight off disk by fetchSource: a developer's build, never cached or asked for early.
+const isFileEntry = (descriptor) => !!descriptor && typeof descriptor.url === 'string' && descriptor.url.indexOf('file:') === 0;
+
+/*
+ * The files of a start's outside tools, asked for before the outside tools list has been fetched
+ * again (refreshOutsideTools), so the list doesn't hold them up. fetchSource takes the answer for
+ * the same link from here, once, instead of asking again. An answer from an earlier load of
+ * EmbodyTools is never used.
+ */
+const early_requests = new Map(); // link -> { generation, answer: Promise<{ response, text }> }
+
+function requestEarly(descriptor) {
+	if (!descriptor || descriptor.team || isFileEntry(descriptor) || typeof descriptor.url !== 'string') return;
+	const { link } = sourceOf(descriptor);
+	if (early_requests.has(link)) return;
+	const answer = fetchWithin(cacheBusted(link));
+	answer.catch(() => { /* fetchSource reads it, or the copy on disk stands in */ });
+	early_requests.set(link, { generation: load_generation, answer: answer });
+}
+
+function takeEarly(link) {
+	const early = early_requests.get(link);
+	if (!early) return null;
+	early_requests.delete(link);
+	return early.generation === load_generation ? early.answer : null;
+}
+
+/*
+ * The copy on disk from the last time an outside tool downloaded, for a start to run at once
+ * (startFromCopies), or null: none yet, a developer's file: entry, a team tool (their copies are
+ * sealed, and only open after the sign-in is read), or no file access to read it with.
+ */
+function savedCopy(descriptor) {
+	if (!descriptor || descriptor.team || isFileEntry(descriptor) || typeof descriptor.url !== 'string') return null;
+	const source = readCache(sourceOf(descriptor).cache_name);
+	return source && source.trim() ? { source: source, origin: 'copy' } : null;
 }
 
 /*
@@ -1192,14 +1240,21 @@ function stateOf(id) {
 	return { status: entry.status, detail: entry.detail || '', origin: entry.origin || '' };
 }
 
-async function loadModule(descriptor) {
+/*
+ * `given`, when the tool's file is already to hand: { source, origin, native } runs that instead
+ * of downloading it, and { error } is a download that already failed. With a file given nothing
+ * in here waits, so the tool is on, or has failed, by the time this returns (asNoPlugin counts on
+ * that). `beforeCheckIn` is a team tool's copy at a start (startTeamFromCopies), which runs while
+ * the check-in is still on its way.
+ */
+async function loadModule(descriptor, given) {
 	if (live.has(descriptor.id)) return live.get(descriptor.id);
 
 	// A team tool that can't be used right now is not loaded, and not remembered as tried,
 	// so it loads as soon as a sign-in or a check-in allows it. That includes one installed
 	// on its own and switched on in Blockbench: that copy runs, and the two must never run
 	// at once.
-	const locked = ownCopyLock(descriptor) || teamLock(descriptor);
+	const locked = ownCopyLock(descriptor) || (given && given.beforeCheckIn ? null : teamLock(descriptor));
 	if (locked) return { descriptor, status: 'locked', detail: locked, origin: '' };
 
 	const entry = { descriptor, status: 'loading', detail: '', origin: '' };
@@ -1209,7 +1264,9 @@ async function loadModule(descriptor) {
 	try {
 		let fetched;
 		try {
-			fetched = descriptor.team ? await fetchTeamSource(descriptor) : await fetchSource(descriptor);
+			if (given && given.error) throw given.error;
+			fetched = (given && typeof given.source === 'string') ? given
+				: (descriptor.team ? await fetchTeamSource(descriptor) : await fetchSource(descriptor));
 		} catch (error) {
 			// Only a failed download is worth trying again later, not a tool that breaks.
 			entry.fetchFailed = true;
@@ -1221,6 +1278,10 @@ async function loadModule(descriptor) {
 		// A team tool's file access is what the service listed, or what its sealed copy says.
 		const effective = fetched.native === undefined ? descriptor
 			: Object.assign({}, descriptor, { native: fetched.native });
+		// What a tool started from its copy runs, and with what access, so a newer file from its
+		// link or the service can be told from the same one (settleCopy).
+		entry.native = effective.native === true;
+		if (fetched.origin === 'copy') entry.source = fetched.source;
 
 		created = createContext(descriptor.id);
 		const bar_items_before = new Set(barItemIds());
@@ -1235,6 +1296,9 @@ async function loadModule(descriptor) {
 		// until its onunload and unloaded_plugin are done: recorded here, so it goes last but one.
 		const record = recordPlugin(effective);
 		if (record) created.ctx.cleanup('Blockbench\'s record of ' + descriptor.id, () => forgetPlugin(record));
+		// What the team shares through this tool (sharedStore). Only a team tool gets it: it acts as
+		// the person signed in, which no outside tool, or one added on this computer, ever may.
+		if (descriptor.team) created.ctx.shared = sharedStore(descriptor.id, created.ctx);
 		const module = evaluateModule(fetched.source, created.ctx, effective, record);
 		// Only a plugin needs it.
 		if (module.kind !== 'plugin') forgetPlugin(record);
@@ -1456,18 +1520,297 @@ async function fetchRegistry() {
 // Still the EmbodyTools that started this, not switched off or reloaded since.
 const stillRunning = (generation) => !!loader && generation === load_generation;
 
-async function loadEnabledModules() {
-	const generation = load_generation;
-	const enabled = readEnabled();
-	for (const descriptor of registry.slice()) {
+/*
+ * A start, faster (David and Quinten, 2026-10-18). Until 3.6.0 every tool downloaded one after
+ * another after onload: the outside tools list, each outside tool, then the sign-in, the check-in
+ * and each team tool. That took 5 to 10 seconds, and Blockbench opens a model given to it at
+ * start ("Open with", a double-click on a .bbmodel) as soon as its plugins' onload has run, so
+ * the model opened before the tools were in: a Hytale model as a Generic Model with "Invalid
+ * Format", since Hytale Models wasn't on yet. Now:
+ *
+ *  - The switched-on outside tools, and ones added on this computer, start from the copies on
+ *    disk from last time while onload runs (startFromCopies), before Blockbench opens anything.
+ *  - Their links, the outside tools list and the team side are all asked at once after that
+ *    (refreshOutsideTools, teamStartup), and the team tools' files at the same time as each other.
+ *  - The switched-on team tools start from their encrypted copies as soon as the saved sign-in is
+ *    read, while the check-in is on its way (startTeamFromCopies, David 2026-10-20), and are
+ *    checked against the service's files once it has answered (refreshTeamCopies).
+ *  - A model opened before the tools it needs are in waits for them (holdModelOpens).
+ */
+
+// The outside tools list as it was last fetched, from disk, or null: where a start begins.
+function cachedRegistry() {
+	if (!REGISTRY_URL) return null;
+	const cached = readCache('registry.json');
+	if (!cached) return null;
+	try {
+		const list = outsideOnly(parseRegistry(JSON.parse(cached)));
+		return list.length ? list : null;
+	} catch (error) {
+		return null;
+	}
+}
+
+const modelsOpen = () => typeof ModelProject !== 'undefined' && !!ModelProject && Array.isArray(ModelProject.all)
+	&& ModelProject.all.length > 0;
+
+/*
+ * Blockbench credits whatever is made while a plugin's onload runs to that plugin
+ * (Plugins.currently_loading). A tool loaded from a copy runs here with nothing in that name, as
+ * tools always did when they loaded later, and the name is put back after. loadModule with a file
+ * given doesn't wait for anything, so the tool is in, or has failed, before this returns.
+ */
+function asNoPlugin(work) {
+	const plugins = (typeof Plugins !== 'undefined' && Plugins) ? Plugins : null;
+	const loading = plugins ? plugins.currently_loading : undefined;
+	if (loading !== undefined) plugins.currently_loading = '';
+	try {
+		return work();
+	} finally {
+		if (loading !== undefined) plugins.currently_loading = loading;
+	}
+}
+
+/*
+ * Every switched-on outside tool, or one added on this computer, that has a copy on disk runs
+ * from it, here and now, while onload runs. refreshOutsideTools then checks its link.
+ */
+function startFromCopies() {
+	if (!isDesktop) return [];
+	const started = [];
+	try {
+		asNoPlugin(() => {
+			const enabled = readEnabled();
+			for (const descriptor of registry.slice()) {
+				if (descriptor.team || !enabled.has(descriptor.id) || live.has(descriptor.id)) continue;
+				const copy = savedCopy(descriptor);
+				if (!copy) continue;
+				loadModule(descriptor, copy);
+				const entry = live.get(descriptor.id);
+				if (entry && entry.status === 'on') started.push(descriptor.name || descriptor.id);
+			}
+		});
+	} catch (error) {
+		complain('could not start the tools from their copies', error);
+	}
+	if (started.length) say('started from the copies on this computer: ' + started.join(', '));
+	return started;
+}
+
+// The switched-on outside tools, and ones added on this computer, but not one installed on its own
+// in Blockbench and switched on there: that copy runs instead (ownCopyLock).
+const outsideEnabled = (enabled) => registry.filter((descriptor) => !descriptor.team && enabled.has(descriptor.id)
+	&& !installedOnItsOwn(descriptor.id));
+
+/*
+ * After a start: the outside tools list again, then the file of every switched-on outside tool,
+ * all at once. The files are asked for before the list (requestEarly), so it doesn't hold them
+ * up. A tool with no copy loads now. One that started from its copy keeps running when its link
+ * has the same file, and is swapped for the newer one when it doesn't, as long as no model is
+ * open: a tool that adds a format can't be swapped under a model in that format, so then the
+ * newer file runs from the next start, from the copy it has just replaced on disk. One no longer
+ * listed stops, and one whose file access changed is loaded again either way.
+ */
+async function refreshOutsideTools(generation) {
+	try {
+		for (const descriptor of outsideEnabled(readEnabled())) requestEarly(descriptor);
+		await fetchRegistry();
 		if (!stillRunning(generation)) return;
-		if (enabled.has(descriptor.id)) {
-			await loadModule(descriptor);
+		registerModuleSettings();
+		// The team tools' copies are refreshTeamCopies' to check, not this list's.
+		for (const [id, entry] of Array.from(live.entries())) {
+			if (entry.origin === 'copy' && !(entry.descriptor && entry.descriptor.team)
+				&& !registry.some((descriptor) => descriptor.id === id && !descriptor.team)) {
+				unloadModule(id);
+				say(id + ' is no longer in the outside tools list, so it stopped');
+			}
+		}
+		const tools = outsideEnabled(readEnabled());
+		const answers = await Promise.all(tools.map((descriptor) => (isFileEntry(descriptor)
+			? Promise.resolve(null)
+			: fetchSource(descriptor).then((fetched) => ({ fetched: fetched }), (error) => ({ error: error })))));
+		if (!stillRunning(generation)) return;
+		for (let i = 0; i < tools.length; i++) {
+			if (!stillRunning(generation)) return;
+			const descriptor = tools[i];
+			const answer = answers[i];
+			const name = descriptor.name || descriptor.id;
+			// Switched off meanwhile: stays off.
+			if (!readEnabled().has(descriptor.id)) continue;
+			const entry = live.get(descriptor.id);
+			if (!entry) {
+				// No copy, or a developer's file: loaded now, from what came.
+				await loadModule(descriptor, answer ? (answer.fetched || { error: answer.error }) : undefined);
+				continue;
+			}
+			if (entry.origin !== 'copy') continue;
+			const fetched = answer && answer.fetched;
+			// Its link didn't answer: the copy it runs is the copy from last time.
+			if (!fetched || fetched.origin !== 'network') {
+				entry.origin = 'cache';
+				entry.descriptor = descriptor;
+				delete entry.source;
+				continue;
+			}
+			await settleCopy(entry, descriptor, fetched, 'its link');
+		}
+	} finally {
+		// Anything asked for early and not used is from a list that's gone now.
+		early_requests.clear();
+	}
+}
+
+/*
+ * A tool that started from its copy, and the file that came for it since, from `where`. The same
+ * file keeps running, now with the origin the file came with. A newer one replaces it, unless a
+ * model is open by then: a tool that adds a format can't be swapped under a model in that format,
+ * so then the newer file, which is the tool's copy from now on, runs from the next start. A copy
+ * that failed to load isn't running, so nothing is swapped under a model then. One whose file
+ * access changed is loaded again either way.
+ */
+async function settleCopy(entry, descriptor, fetched, where) {
+	const name = descriptor.name || descriptor.id;
+	const native = fetched.native === undefined ? descriptor.native === true : fetched.native === true;
+	const same_access = entry.native === native;
+	const same_file = fetched.source === entry.source;
+	delete entry.source;
+	if (same_file && same_access) {
+		entry.origin = fetched.origin;
+		entry.descriptor = descriptor;
+		return;
+	}
+	if (same_access && entry.status === 'on' && modelsOpen()) {
+		entry.origin = 'newer at next start';
+		entry.descriptor = descriptor;
+		say('a newer ' + name + ' came from ' + where + ' after a model opened, so it runs from the next start');
+		return;
+	}
+	unloadModule(descriptor.id);
+	await loadModule(descriptor, fetched);
+	say(same_access ? 'updated ' + name + ' to the newer file from ' + where
+		: 'loaded ' + name + ' again, as its file access changed');
+}
+
+/*
+ * Models opened while EmbodyTools is starting wait until the tools they may need are in.
+ * Blockbench opens a model given to it at start the moment its plugins' onload has run, and a
+ * team tool takes a second or so more: the saved sign-in, the check-in and the download. A model
+ * opened before then opened without it, in the wrong format without Hytale Models, or without the
+ * layers Delta Layers keeps, and the same went for one picked from the start screen's recent list
+ * in those first seconds (Quinten, 2026-10-18). So until the start is done, every model
+ * Blockbench opens through its global loadModelFile waits, and opens in the same order after:
+ * "Open with" and a double-click at start, the start screen's recent list and File > Open Recent
+ * call it by that name. A file Blockbench didn't know at start, such as a .blockymodel before
+ * Hytale Models is in, is tried again then too. File > Open and a model dropped onto the window
+ * call Blockbench's own copy of the function inside its io.js, so they open as they always did.
+ * Only installed when the start has something to wait for.
+ *
+ * Never longer than HOLD_LIMIT_MS, whatever is still loading. Blockbench's two functions are
+ * wrapped, not replaced: each is put back as it was if ours is still the one in place, and left
+ * passing everything straight through if another plugin wrapped it since.
+ */
+const HOLD_LIMIT_MS = 10000;
+const HOLD_NOTICE_MS = 500;
+let hold = null;
+
+function holdModelOpens() {
+	if (hold) return;
+	const page = globalThis;
+	const state = { open: false, queue: [], wraps: [], limit: null, notice: null, since: Date.now(), first: 0 };
+	const wait = (what, run) => {
+		if (!state.queue.length) state.first = Date.now();
+		state.queue.push({ what: what, run: run });
+		if (!state.notice) state.notice = setTimeout(() => noticeHeld(state), HOLD_NOTICE_MS);
+	};
+	const wrap = (name, make) => {
+		const original = page[name];
+		if (typeof original !== 'function') return;
+		const wrapper = make(original);
+		page[name] = wrapper;
+		state.wraps.push({ name: name, original: original, wrapper: wrapper });
+	};
+	wrap('loadModelFile', (original) => function (file) {
+		if (state.open) return original.apply(this, arguments);
+		const args = Array.prototype.slice.call(arguments);
+		wait(fileName(file && (file.path || file.name)), () => page.loadModelFile.apply(page, args));
+		return undefined;
+	});
+	// "Open with" at start says a file is unsupported before trying it, when no tool reads its
+	// kind yet. Desktop only: anywhere else there's no path to read it from again.
+	if (isDesktop) {
+		wrap('unsupportedFileFormatMessage', (original) => function (file_path) {
+			if (state.open || typeof file_path !== 'string' || !file_path) return original.apply(this, arguments);
+			const args = Array.prototype.slice.call(arguments);
+			wait(fileName(file_path), () => openAgain(page, file_path, () => original.apply(page, args)));
+			return undefined;
+		});
+	}
+	if (!state.wraps.length) return;
+	// Long, so a test's settle() never waits for it.
+	state.limit = setTimeout(() => releaseModelOpens('the tools were still loading after ' + (HOLD_LIMIT_MS / 1000) + ' seconds'), HOLD_LIMIT_MS);
+	hold = state;
+}
+
+const fileName = (path) => {
+	const text = String(path || 'a model');
+	return text.split(/[\\/]/).pop() || text;
+};
+
+function noticeHeld(state) {
+	state.notice = null;
+	if (state.open || !state.queue.length) return;
+	const names = state.queue.map((item) => item.what);
+	say('waiting for the tools before opening ' + names.join(', '));
+	try {
+		Blockbench.showQuickMessage('Opening ' + (names.length === 1 ? names[0] : names.length + ' models')
+			+ ' as soon as your EmbodyTools tools are in', 3000);
+	} catch (error) { /* the line in the log says it too */ }
+}
+
+// A file Blockbench said it couldn't open at start, tried again the way its "Open with" does.
+function openAgain(page, file_path, otherwise) {
+	const extension = typeof pathToExtension === 'function' ? String(pathToExtension(file_path)).toLowerCase() : '';
+	const known = (typeof Codec !== 'undefined' && Codec && typeof Codec.getAllExtensions === 'function')
+		? Codec.getAllExtensions() : [];
+	if (extension && known.includes(extension) && typeof Blockbench.read === 'function') {
+		Blockbench.read([file_path], {}, (files) => page.loadModelFile(files[0]));
+	} else {
+		otherwise();
+	}
+}
+
+// Every model that waited opens, in order. Returns how long the first one waited, in ms.
+function releaseModelOpens(why) {
+	const state = hold;
+	if (!state) return 0;
+	hold = null;
+	state.open = true;
+	clearTimeout(state.limit);
+	if (state.notice) clearTimeout(state.notice);
+	for (const wrapped of state.wraps) {
+		if (globalThis[wrapped.name] === wrapped.wrapper) globalThis[wrapped.name] = wrapped.original;
+	}
+	const queue = state.queue.splice(0);
+	if (!queue.length) return 0;
+	const waited = Date.now() - state.first;
+	say('opening ' + queue.map((item) => item.what).join(', ') + ', which waited ' + waited + ' ms for the tools'
+		+ (why ? ': ' + why : ''));
+	for (const item of queue) {
+		try {
+			item.run();
+		} catch (error) {
+			complain('could not open ' + item.what, error);
 		}
 	}
-	if (!stillRunning(generation)) return;
+	return waited;
+}
+
+// What the start ended with, in the log.
+function reportReady(started_at, held) {
 	const on = Array.from(live.values()).filter((entry) => entry.status === 'on');
-	say('v' + PLUGIN_VERSION + ' ready: ' + (on.map((e) => e.descriptor.name || e.descriptor.id).join(', ') || 'no modules enabled'));
+	say('v' + PLUGIN_VERSION + ' ready in ' + (Date.now() - started_at) + ' ms'
+		+ (held ? ', models waited ' + held + ' ms' : '') + ': '
+		+ (on.map((e) => (e.descriptor.name || e.descriptor.id) + ' (' + e.origin + ')').join(', ') || 'no modules enabled'));
 	redrawPluginPage();
 }
 
@@ -1491,16 +1834,18 @@ function unloadAll() {
  *                SAVED SIGN-IN below): Windows DPAPI, the macOS Keychain, or the Linux
  *                desktop's keyring. The ID token, which is what the service checks, stays in
  *                memory.
- *   Check-ins    /v1/me at start before any team tool loads, when the Tools tab opens, and
- *                every 15 minutes. A clear refusal from the service, a renewal Google turned
- *                down included, removes every team tool at once: switched off, copies
- *                deleted, sign-in forgotten, and remembered so no old copy runs later. A
- *                refusal is a 403 in the service's own words; any other answer, or none,
- *                counts as offline.
+ *   Check-ins    /v1/me at start, when the Tools tab opens, and every 15 minutes. Nothing
+ *                from the service loads before one has answered. A clear refusal from the
+ *                service, a renewal Google turned down included, removes every team tool at
+ *                once: switched off, copies deleted, sign-in forgotten, and remembered so no
+ *                old copy runs later. A refusal is a 403 in the service's own words; any other
+ *                answer, or none, counts as offline.
  *   Copies       Each team tool as last downloaded, encrypted with AES-GCM under the key from
- *                /v1/key, in IndexedDB. Never in the plugins folder. Used only when the
- *                service can't be reached, and only within a week of the last check-in, by
- *                a clock that hasn't been turned back.
+ *                /v1/key, in IndexedDB. Never in the plugins folder. Used only within a week
+ *                of the last check-in, by a clock that hasn't been turned back: when the
+ *                service can't be reached, and at a start while the check-in is on its way
+ *                (startTeamFromCopies). Once it has answered they are kept, swapped for the
+ *                service's newer files, or taken away (refreshTeamCopies).
  *   Branches     Each card can load its tool from another branch of its repo (/v1/branches,
  *                /v1/tools/<id>?branch=), picked per computer. A copy is of one branch.
  *                An outside tool can have builds to pick too, listed in its registry entry.
@@ -2358,6 +2703,100 @@ async function serviceRequest(path, as) {
 	throw teamError('expired', 'the access service did not accept a fresh sign-in');
 }
 
+// ---- what the team shares through a tool (ctx.shared) -------------------------------------------
+
+/*
+ * A team tool's own space on the service, /v1/shared/<its id>: the things people share through
+ * it, such as Gradient Map Layer's gradients, each kept under the name of whoever shared it. The
+ * calls go as the person signed in, with the ID token added here, so the tool never sees the
+ * token and can't reach any other route or any other tool's space.
+ *
+ * Every call resolves to the service's answer, or rejects with an Error whose `code` says what
+ * to tell the person: signed_out, offline, refused, unavailable (a service from before shared
+ * items, or one that keeps nothing for this tool), unknown_item, not_yours, too_many,
+ * bad_request, rate_limited, or unloaded once the tool has been switched off. A refusal here
+ * changes nothing on its own: the next check-in hears it too, and does what it always does.
+ */
+const SHARED_CODES = {
+	not_found: 'unavailable',
+	unknown_space: 'unavailable',
+	unknown_item: 'unknown_item',
+	not_yours: 'not_yours',
+	too_many: 'too_many',
+	bad_request: 'bad_request',
+	rate_limited: 'rate_limited',
+};
+
+function sharedError(code, detail) {
+	return Object.assign(new Error(detail || code), { code: code });
+}
+
+async function sharedRequest(tool, method, item, payload) {
+	const path = '/v1/shared/' + encodeURIComponent(tool) + (item === null ? '' : '/' + encodeURIComponent(item));
+	for (let attempt = 0; attempt < 2; attempt++) {
+		let token;
+		try {
+			token = await ensureIdToken(attempt > 0);
+		} catch (error) {
+			if (error.kind === 'refused' || error.kind === 'offline') throw sharedError(error.kind, error.message);
+			throw sharedError('signed_out', error.message);
+		}
+		const headers = { Authorization: 'Bearer ' + token };
+		const options = { method: method, headers: headers };
+		if (payload !== undefined) {
+			headers['Content-Type'] = 'application/json';
+			options.body = JSON.stringify(payload);
+		}
+		let answer;
+		try {
+			answer = await fetchWithin(SERVICE_URL + path, options);
+		} catch (error) {
+			throw sharedError('offline', 'could not reach the access service: ' + error.message);
+		}
+		const status = answer.response.status;
+		const body = parseJson(answer.text);
+		if (status === 401 && body && body.status) {
+			if (attempt === 0) continue;
+			throw sharedError('signed_out', 'the access service did not accept a fresh sign-in');
+		}
+		if (status === 403 && refusalIn(body)) throw sharedError('refused', 'the access service refused: ' + body.status);
+		if (answer.response.ok && body && typeof body === 'object') return body;
+		const code = body && typeof body.error === 'string' && Object.prototype.hasOwnProperty.call(SHARED_CODES, body.error)
+			? SHARED_CODES[body.error] : null;
+		if (code) throw sharedError(code, body.error + (typeof body.reason === 'string' ? ': ' + body.reason : ''));
+		throw sharedError('offline', 'the access service answered ' + status);
+	}
+	throw sharedError('signed_out', 'the access service did not accept a fresh sign-in');
+}
+
+/*
+ * ctx.shared for a team tool: list(), add({ name, data }), update(id, { name, data }) and
+ * remove(id). Only `name` and `data` are sent on, and an id only ever as one part of the path.
+ * Switching the tool off closes it, so a call that comes late, from a timer or a dialog left
+ * open, is refused rather than made in the name of a tool that isn't running.
+ */
+function sharedStore(tool, ctx) {
+	let open = true;
+	ctx.cleanup('shared items of ' + tool, () => { open = false; });
+	const call = (method, item, payload) => (open
+		? sharedRequest(tool, method, item, payload)
+		: Promise.reject(sharedError('unloaded', tool + ' is switched off')));
+	const fields = (from) => {
+		const out = {};
+		if (from && typeof from === 'object') {
+			if (from.name !== undefined) out.name = from.name;
+			if (from.data !== undefined) out.data = from.data;
+		}
+		return out;
+	};
+	return Object.freeze({
+		list: () => call('GET', null),
+		add: (item) => call('POST', null, fields(item)),
+		update: (id, changes) => call('PATCH', String(id), fields(changes)),
+		remove: (id) => call('DELETE', String(id)),
+	});
+}
+
 // The key for the offline copies. Copies under an earlier key are useless, so they go.
 async function fetchOfflineKey() {
 	const body = await serviceRequest('/v1/key');
@@ -2427,9 +2866,10 @@ function writeTeamListCache(list) {
 	}
 }
 
-async function refreshTeamList() {
+// `pending`, the same request already made (teamStartup), or a new one.
+async function refreshTeamList(pending) {
 	try {
-		const list = parseTeamList(await serviceRequest('/v1/registry'), true);
+		const list = parseTeamList(await (pending || serviceRequest('/v1/registry')), true);
 		team.list = list;
 		writeTeamListCache(list);
 		rebuildRegistry();
@@ -2999,6 +3439,7 @@ const TEAM_TOOL_NAMES = {
 	dodge_blend_modes: 'Dodge Blend Modes',
 	easyboxuv: 'Easy Box UV',
 	adrullanmodel: 'Adrullan Model',
+	hytale_importer: 'Kweebec Express',
 };
 const ON_ITS_OWN = 'Installed on its own in Blockbench';
 // The tools already named in the log as installed on their own, once per start.
@@ -3112,8 +3553,12 @@ function cleanUpOldFolder() {
 
 // ---- at start ------------------------------------------------------------------------
 
-// Before any team tool loads: who is signed in, and whether the service still says yes.
-async function teamStartup() {
+/*
+ * Who is signed in, and whether the service still says yes. `start`, at a start with no model open
+ * yet (onload): { generation, onCopies }. The switched-on team tools then run from their copies
+ * while the check-in is on its way (startTeamFromCopies), and onCopies is called once they all do.
+ */
+async function teamStartup(start) {
 	team.list = readTeamListCache();
 	rebuildRegistry();
 	if (!isDesktop) { setTeamState('web'); return; }
@@ -3159,8 +3604,117 @@ async function teamStartup() {
 	}
 	if (team.key) team.seen = await readSeen();
 	setTeamState('checking');
-	const result = await checkIn();
-	if (result === 'online') await refreshTeamList();
+	// Asked for alongside the check-in rather than after it: the team list, and the files of the
+	// tools switched on here (requestTeamTools). None of it is used unless the check-in says this
+	// account may, and the requests wait for the one renewal of the sign-in the check-in makes.
+	const listing = serviceRequest('/v1/registry');
+	listing.catch(() => { /* refreshTeamList reads it, or nothing does */ });
+	requestTeamTools();
+	const checking_in = checkIn();
+	checking_in.catch(() => { /* awaited below */ });
+	if (start && await startTeamFromCopies(start.generation) && start.onCopies) start.onCopies();
+	const result = await checking_in;
+	if (result === 'online') await refreshTeamList(listing);
+}
+
+/*
+ * At a start, every switched-on team tool runs from its copy while the check-in is on its way
+ * (David, 2026-10-20: "the user has copies of all the plugins on their machine right? ... might
+ * as well load them asap"), so a model opened at start has them a second or so sooner. Only
+ * when the copy could run offline right now: signed in with the key, never refused, within the
+ * grace period by a clock that wasn't turned back, and a copy of the branch picked. The check-in
+ * then decides, as it always did (refreshTeamCopies): someone offboarded whose computer still
+ * has copies gets them for the second or so it takes, no more than going offline would give
+ * them. Returns whether every switched-on team tool is in now, so models can stop waiting.
+ */
+async function startTeamFromCopies(generation) {
+	const epoch = account_epoch;
+	const enabled = readEnabled();
+	const wanted = registry.filter((descriptor) => descriptor.team && enabled.has(descriptor.id)
+		&& !installedOnItsOwn(descriptor.id));
+	if (!wanted.length || !team.key || isRefused()) return false;
+	let copies;
+	try {
+		if (!withinGrace(await readLastCheck())) return false;
+		copies = await Promise.all(wanted.map((descriptor) => readCopy(descriptor.id)));
+	} catch (error) {
+		grumble('could not read the copies of the team tools', error);
+		return false;
+	}
+	// Switched off, signed out, refused or already answered meanwhile: nothing from a copy now.
+	if (!stillRunning(generation) || epoch !== account_epoch || team.state !== 'checking' || isRefused()) return false;
+	const started = [];
+	try {
+		asNoPlugin(() => {
+			wanted.forEach((descriptor, i) => {
+				const copy = copies[i];
+				// A copy is of one branch, and never passed off as another (fetchTeamSource).
+				if (!copy || (copy.branch || null) !== chosenBranch(descriptor.id)) return;
+				if (live.has(descriptor.id) || !readEnabled().has(descriptor.id)) return;
+				loadModule(descriptor, { source: copy.source, origin: 'copy', native: copy.native === true, beforeCheckIn: true });
+				const entry = live.get(descriptor.id);
+				if (entry && entry.status === 'on') started.push(descriptor.name || descriptor.id);
+			});
+		});
+	} catch (error) {
+		complain('could not start the team tools from their copies', error);
+	}
+	if (started.length) say('started from their copies while the check-in is on its way: ' + started.join(', '));
+	return wanted.every((descriptor) => {
+		const entry = live.get(descriptor.id);
+		return !!entry && (entry.status === 'on' || entry.status === 'blocked');
+	});
+}
+
+/*
+ * After the check-in at a start, the team tools that started from their copies. Online, each is
+ * checked against the service's file, asked for alongside the check-in (settleCopy), and one no
+ * longer in the team's list stops. Offline within the grace period they carry on as offline
+ * copies. Any other answer has taken them away already (handleTeamError), and any still left go.
+ */
+async function refreshTeamCopies(generation) {
+	const started = Array.from(live.values()).filter((entry) => entry.descriptor && entry.descriptor.team
+		&& entry.origin === 'copy');
+	for (const entry of started) {
+		if (!stillRunning(generation)) return;
+		const id = entry.descriptor.id;
+		const name = entry.descriptor.name || id;
+		if (live.get(id) !== entry) continue;
+		if (team.state === 'offline') {
+			entry.origin = 'offline copy';
+			delete entry.source;
+			continue;
+		}
+		if (team.state !== 'online') {
+			unloadModule(id);
+			say(name + ' stopped: ' + (teamMessage() || team.state));
+			continue;
+		}
+		const descriptor = registry.find((d) => d.id === id && d.team);
+		if (!descriptor) {
+			unloadModule(id);
+			say(name + ' is no longer one of the team tools, so it stopped');
+			continue;
+		}
+		let fetched;
+		try {
+			fetched = await fetchTeamSource(descriptor);
+		} catch (error) {
+			// Refused: gone already, with every other team tool. Signed in again needed: it goes
+			// too, as it couldn't have loaded. Anything else: the copy carries on.
+			if (live.get(id) !== entry) continue;
+			if (team.state !== 'online') {
+				unloadModule(id);
+				say(name + ' stopped: ' + (teamMessage() || team.state));
+				continue;
+			}
+			grumble('could not check ' + name + ' with the access service, so its copy carries on', error.message || error);
+			continue;
+		}
+		if (!stillRunning(generation) || live.get(id) !== entry) continue;
+		await settleCopy(entry, descriptor, fetched, 'the access service');
+	}
+	if (started.length) redrawPanels();
 }
 
 // The Try again on "the saved sign-in could not be read": the whole start over, file included.
@@ -3177,6 +3731,8 @@ async function loadEnabledTeamTools() {
 	if (!loader) return;
 	const generation = load_generation;
 	const enabled = readEnabled();
+	// Every file asked for at once, then each tool loaded in turn as before.
+	if (team.state === 'online') requestTeamTools();
 	for (const descriptor of registry.slice()) {
 		if (!stillRunning(generation)) return;
 		if (!descriptor.team || !enabled.has(descriptor.id) || live.has(descriptor.id)) continue;
@@ -3217,6 +3773,50 @@ function teamLock(descriptor) {
 	return TEAM_LOCKS[team.state] || 'Sign in to use';
 }
 
+/*
+ * The files of the team tools switched on here, asked for all at once instead of one download
+ * after another: at a start alongside the check-in (teamStartup), and before the tools load
+ * (loadEnabledTeamTools). fetchTeamSource takes each answer once and reads it the way it reads
+ * its own request, a refusal included, but only for the same tool, branch, account and load of
+ * EmbodyTools, within TEAM_REQUEST_FRESH_MS, and never one that failed: that one is asked for
+ * again. Nothing runs from one before the check-in has said this account may (teamLock), and a
+ * request still waiting for the sign-in's renewal when EmbodyTools is switched off never goes out.
+ */
+const team_requests = new Map(); // id -> { branch, epoch, generation, at, failed, answer }
+const TEAM_REQUEST_FRESH_MS = 60 * 1000;
+
+const teamToolPath = (id, branch) => '/v1/tools/' + encodeURIComponent(id) + (branch ? '?branch=' + encodeURIComponent(branch) : '');
+
+function teamRequestUsable(kept, branch) {
+	return !!kept && !kept.failed && kept.branch === branch && kept.epoch === account_epoch
+		&& kept.generation === load_generation && Date.now() - kept.at < TEAM_REQUEST_FRESH_MS;
+}
+
+function requestTeamTools() {
+	if (!isDesktop || !loader) return;
+	const enabled = readEnabled();
+	for (const descriptor of registry) {
+		if (!descriptor.team || !enabled.has(descriptor.id) || live.has(descriptor.id) || installedOnItsOwn(descriptor.id)) continue;
+		const branch = chosenBranch(descriptor.id);
+		if (teamRequestUsable(team_requests.get(descriptor.id), branch)) continue;
+		const kept = { branch: branch, epoch: account_epoch, generation: load_generation, at: Date.now(), failed: false, answer: null };
+		kept.answer = (async () => {
+			await ensureIdToken(false);
+			if (!stillRunning(kept.generation) || kept.epoch !== account_epoch) throw teamError('offline', 'not asked for: EmbodyTools was switched off or signed out');
+			return serviceRequest(teamToolPath(descriptor.id, branch), 'text');
+		})();
+		kept.answer.catch(() => { kept.failed = true; });
+		team_requests.set(descriptor.id, kept);
+	}
+}
+
+function takeTeamRequest(id, branch) {
+	const kept = team_requests.get(id);
+	if (!kept) return null;
+	team_requests.delete(id);
+	return teamRequestUsable(kept, branch) ? kept.answer : null;
+}
+
 // Where a team tool's code comes from: the service, or when it can't be reached, the copy.
 // Either way from the branch picked on its card, or its default.
 async function fetchTeamSource(descriptor) {
@@ -3224,8 +3824,8 @@ async function fetchTeamSource(descriptor) {
 	const branch = chosenBranch(descriptor.id);
 	if (team.state === 'online') {
 		try {
-			const source = await serviceRequest('/v1/tools/' + encodeURIComponent(descriptor.id)
-				+ (branch ? '?branch=' + encodeURIComponent(branch) : ''), 'text');
+			const source = await (takeTeamRequest(descriptor.id, branch)
+				|| serviceRequest(teamToolPath(descriptor.id, branch), 'text'));
 			if (!source || !source.trim()) throw new Error('the access service sent an empty file');
 			await saveCopy(descriptor.id, source, descriptor.native, branch);
 			return { source: source, origin: 'service', native: descriptor.native === true };
@@ -4195,6 +4795,10 @@ const SOURCE_CHIPS = {
 	'offline copy': { icon: 'saved', text: 'Offline copy', title: 'Runs from the copy saved on this computer, while offline' },
 	network: { icon: 'link', text: 'Author\'s link', title: 'Loads from its author\'s own link' },
 	cache: { icon: 'saved', text: 'Copy from last time', title: 'Its link didn\'t answer, so the copy from last time runs' },
+	// Started from its copy at this start, while its link or the service is asked for a newer one
+	// (startFromCopies, startTeamFromCopies).
+	copy: { icon: 'saved', text: 'Copy from last time', title: 'Started from the copy on this computer while a newer one is looked for' },
+	'newer at next start': { icon: 'saved', text: 'Update at next start', title: 'A newer version came after a model was open, so it runs from the next start' },
 	'local file': { icon: 'folder', text: 'File on this computer', title: 'Read from a file on this computer' },
 	local: { icon: 'link', text: 'Added on this computer', title: 'Loads from a link added on this computer' },
 };
@@ -5227,6 +5831,8 @@ function buildCardPanel(options) {
 		if (descriptor.native === true) chip('File access', '', 'folder', 'It can read and write files on this computer');
 		if (state.status === 'on' && state.origin === 'offline copy') chip('Offline copy', '', null, 'Running from the copy saved on this computer');
 		if (state.status === 'on' && state.origin === 'cache') chip('Cached copy', '', null, 'Its link could not be reached, so the copy from last time runs');
+		if (state.status === 'on' && state.origin === 'newer at next start') chip('Update at next start', '', null,
+			'A newer version came after a model was open, so it runs from the next start');
 
 		const line2 = element('div', 'et-line2');
 		const description = (module && module.description) || descriptor.description || '';
@@ -5757,24 +6363,23 @@ registrar.register(PLUGIN_ID, {
 		// What's new, at the first model opened or made after an update.
 		loader.ctx.on('select_project', onProjectSelected);
 
-		// Deferred so that the plugin list has settled and a slow network does not hold up
-		// Blockbench's own startup.
 		/*
-		 * Synchronously, inside onload, for the built-in registry. Blockbench builds a
-		 * plugin's Features list from what it registered while loading, so anything
-		 * created later in a setTimeout is not credited to the plugin even when it passes
-		 * the right plugin id. Whatever the remote registry adds gets its checkbox below.
+		 * The checkboxes below are made synchronously, inside onload, for the list as last
+		 * fetched. Blockbench builds a plugin's Features list from what it registered while
+		 * loading, so anything created later in a setTimeout is not credited to the plugin even
+		 * when it passes the right plugin id. Whatever the fresh list adds gets its checkbox later.
 		 */
 		watchPluginPage();
 		loader.ctx.cleanup('plugin page cards', unwatchPluginPage);
 
-		// Start from the built-in list every time. Without this, a Disable and Enable in
-		// place (which reuses this closure rather than re-reading the file) began from
-		// whatever the last fetch left in `registry`, so the first load and every later
-		// one registered different checkboxes. The team tools as last listed come with it,
-		// locked until the check-in below, so their checkboxes are credited to us too.
-		outside_list = REGISTRY.map(withCleanBuilds);
+		// Start from the outside tools list as last fetched, on disk, or the built-in one, never
+		// from what the last fetch left in `registry`: a Disable and Enable in place reuses this
+		// closure rather than re-reading the file, and began from that, so the first load and
+		// every later one registered different checkboxes. The team tools as last listed come
+		// with it, locked until the check-in below, so their checkboxes are credited to us too.
 		team.list = readTeamListCache();
+		const listed_on_disk = cachedRegistry();
+		outside_list = listed_on_disk || REGISTRY.map(withCleanBuilds);
 		team.state = isDesktop ? 'checking' : 'web';
 		rebuildRegistry();
 
@@ -5794,11 +6399,42 @@ registrar.register(PLUGIN_ID, {
 		loader.ctx.cleanup('an open branch list', () => closeBranchList(false));
 		told_on_its_own.clear();
 
-		// Outside tools first, so a slow check-in never holds them up. Then the check-in, and
-		// only after it any team tool. A Disable before this finishes stops it where it is.
 		const generation = ++load_generation;
 		const current = () => generation === load_generation && !!loader;
+		const started_at = Date.now();
+
+		loader.ctx.cleanup('requests made early', () => {
+			early_requests.clear();
+			team_requests.clear();
+		});
+
+		// The outside tools with a copy on disk, from it, now, before Blockbench opens any model,
+		// and the team tools from theirs as soon as the saved sign-in is read (teamStartup). Not
+		// when EmbodyTools is switched on with models open already: then they load from their
+		// links and the service, as they always have, so nothing is swapped under an open model.
+		const fresh_start = !modelsOpen();
+		if (fresh_start) startFromCopies();
+		// What a model has to wait for: an outside tool that had no copy to start from, and the
+		// team side, when a team tool is switched on. Without the list on disk, as with no file
+		// access, a tool switched on here that the built-in list doesn't have may be an outside
+		// tool that comes with the fresh list, so models wait for that too.
+		const enabled = readEnabled();
+		const listed = new Set(registry.map((descriptor) => descriptor.id));
+		const wait_outside = outsideEnabled(enabled).some((descriptor) => !live.has(descriptor.id))
+			|| (!listed_on_disk && !!REGISTRY_URL && readRememberedEnabled().some((id) => !listed.has(id)));
+		const wait_team = isDesktop && registry.some((descriptor) => descriptor.team && enabled.has(descriptor.id)
+			&& !installedOnItsOwn(descriptor.id));
+		// Models opened from now until then wait for them (holdModelOpens).
+		if (wait_outside || wait_team) {
+			holdModelOpens();
+			loader.ctx.cleanup('models waiting for the tools', () => releaseModelOpens('EmbodyTools was switched off'));
+		}
+
+		// Then the links, the outside tools list and the team side, all at once, so neither waits
+		// for the other. A Disable before this finishes stops it where it is.
 		setTimeout(async () => {
+			// Switched off before this ran: nothing of this start goes on.
+			if (!current()) return;
 			// EmbodyTools' own old folder, from earlier versions. Plugins installed in
 			// Blockbench are never touched.
 			try {
@@ -5806,22 +6442,31 @@ registrar.register(PLUGIN_ID, {
 			} catch (error) {
 				complain('could not clear the old EmbodyTools folder', error);
 			}
-			await fetchRegistry();
+			const outside = refreshOutsideTools(generation)
+				.catch((error) => complain('could not load the outside tools', error));
+			// Models wait for the team tools only until they are all in from their copies, when they
+			// can be, not for the check-in and the service's files after.
+			let copies_in = null;
+			const team_copies = new Promise((resolve) => { copies_in = resolve; });
+			const team_side = (async () => {
+				try {
+					await teamStartup(fresh_start ? { generation: generation, onCopies: copies_in } : undefined);
+				} catch (error) {
+					complain('could not check the sign-in for the team tools', error);
+				}
+				if (!current()) return;
+				registerModuleSettings();
+				await loadEnabledTeamTools();
+				await refreshTeamCopies(generation);
+			})().catch((error) => complain('could not load the team tools', error));
+			await Promise.all([wait_outside ? outside : null, wait_team ? Promise.race([team_copies, team_side]) : null]);
+			const held = current() ? releaseModelOpens() : 0;
+			await Promise.all([outside, team_side]);
 			if (!current()) return;
-			registerModuleSettings();
-			await loadEnabledModules();
-			if (!current()) return;
-			try {
-				await teamStartup();
-			} catch (error) {
-				complain('could not check the sign-in for the team tools', error);
-			}
-			if (!current()) return;
-			registerModuleSettings();
-			await loadEnabledTeamTools();
+			reportReady(started_at, held);
 			// A model already open, as when EmbodyTools is switched on mid-session, counts as
 			// opened now.
-			if (current() && typeof Project !== 'undefined' && Project) onProjectSelected();
+			if (typeof Project !== 'undefined' && Project) onProjectSelected();
 		}, 0);
 	},
 
