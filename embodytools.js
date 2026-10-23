@@ -48,7 +48,7 @@ const PLUGIN_ID = 'embodytools';
 // Bumped on every deploy during testing, so the plugin page shows at a glance whether the
 // running copy is the latest file. If the page does not say this number, Blockbench is
 // reading some other file.
-const PLUGIN_VERSION = '3.6.0';
+const PLUGIN_VERSION = '3.6.1';
 const TAG = '[embodytools]';
 
 /*
@@ -806,7 +806,9 @@ function createContext(id) {
 // ===== FETCHING AND EVALUATING =============================================
 // ===========================================================================
 
-async function fetchSource(descriptor) {
+// `running`: the tool's entry when it's running already, such as from its copy at this start, whose
+// copy isn't written again when its link has the same file (sameAsCopy).
+async function fetchSource(descriptor, running) {
 	/*
 	 * A module read straight off disk, for working on one before it is hosted anywhere.
 	 * `file:C:/path/to/module.js`. Desktop only, and not something to ship in a registry
@@ -829,7 +831,7 @@ async function fetchSource(descriptor) {
 		// An outside link that redirects into the team's GitHub is still a team link.
 		if (isTeamLink(response.url)) throw new Error('its link leads to one of the team\'s repos, which never load from a link');
 		if (!source || !source.trim()) throw new Error('empty response');
-		writeCache(cache_name, source);
+		if (!sameAsCopy(running, cache_name, source)) writeCache(cache_name, source);
 		return { source: source, origin: 'network' };
 	} catch (error) {
 		const cached = readCache(cache_name);
@@ -892,9 +894,18 @@ function takeEarly(link) {
  */
 function savedCopy(descriptor) {
 	if (!descriptor || descriptor.team || isFileEntry(descriptor) || typeof descriptor.url !== 'string') return null;
-	const source = readCache(sourceOf(descriptor).cache_name);
-	return source && source.trim() ? { source: source, origin: 'copy' } : null;
+	const file = sourceOf(descriptor).cache_name;
+	const source = readCache(file);
+	return source && source.trim() ? { source: source, origin: 'copy', file: file } : null;
 }
+
+/*
+ * The copy a tool started from at this start (startFromCopies), still the file in that cache file:
+ * the same file from its link isn't written over it again (David, 2026-10-22). Every start used to
+ * rewrite every outside tool's copy, about 1 MB and 5 to 7 ms of disk writes with seven tools on.
+ */
+const sameAsCopy = (running, cache_name, source) => !!running && running.copy_file === cache_name
+	&& typeof running.source === 'string' && running.source === source;
 
 /*
  * Turn source into a module object. The same thing Blockbench does to every plugin it
@@ -1587,6 +1598,8 @@ function startFromCopies() {
 				if (!copy) continue;
 				loadModule(descriptor, copy);
 				const entry = live.get(descriptor.id);
+				// Which cache file it came from, so the same file from its link isn't written over it (sameAsCopy).
+				if (entry) entry.copy_file = copy.file;
 				if (entry && entry.status === 'on') started.push(descriptor.name || descriptor.id);
 			}
 		});
@@ -1628,7 +1641,7 @@ async function refreshOutsideTools(generation) {
 		const tools = outsideEnabled(readEnabled());
 		const answers = await Promise.all(tools.map((descriptor) => (isFileEntry(descriptor)
 			? Promise.resolve(null)
-			: fetchSource(descriptor).then((fetched) => ({ fetched: fetched }), (error) => ({ error: error })))));
+			: fetchSource(descriptor, live.get(descriptor.id)).then((fetched) => ({ fetched: fetched }), (error) => ({ error: error })))));
 		if (!stillRunning(generation)) return;
 		for (let i = 0; i < tools.length; i++) {
 			if (!stillRunning(generation)) return;
@@ -2181,16 +2194,24 @@ const toolTrouble = (run) => (run.err || run.out || '').trim().slice(0, 200);
 // ---- Windows: DPAPI ----
 
 /*
+ * System.Security, where DPAPI lives, loaded by its full name. That's about 50 ms quicker per run
+ * than Add-Type, a cmdlet PowerShell has to load first: 187 ms against 240 ms for an unprotect on
+ * David's PC (2026-10-22). Add-Type stays as the fallback.
+ */
+const PS_LOAD_SECURITY = "try{[void][Reflection.Assembly]::Load('System.Security, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a')}"
+	+ 'catch{Add-Type -AssemblyName System.Security};';
+
+/*
  * Exit 3 is Unprotect saying no, or a blob that isn't one: a file from another Windows
  * account, or a damaged one, which can't ever be read. Any other failure, such as antivirus
  * stopping PowerShell, may pass, so the file is kept.
  */
-const PS_PROTECT = 'Add-Type -AssemblyName System.Security;'
+const PS_PROTECT = PS_LOAD_SECURITY
 	+ '$in=[Console]::In.ReadToEnd().Trim();'
 	+ '$b=[Convert]::FromBase64String($in);'
 	+ '$e=[Security.Cryptography.ProtectedData]::Protect($b,$null,"CurrentUser");'
 	+ '[Convert]::ToBase64String($e)';
-const PS_UNPROTECT = 'Add-Type -AssemblyName System.Security;'
+const PS_UNPROTECT = PS_LOAD_SECURITY
 	+ '$in=[Console]::In.ReadToEnd().Trim();'
 	+ 'try{$e=[Convert]::FromBase64String($in);'
 	+ '$b=[Security.Cryptography.ProtectedData]::Unprotect($e,$null,"CurrentUser")}'
@@ -2372,6 +2393,14 @@ function vaultExists() {
 
 async function readVault(prompt) {
 	if (vault_bag !== undefined) return vault_bag;
+	// Signed out, refused or signed in again while PowerShell ran: whatever is known by then stands,
+	// so an old sign-in read just before a sign-out never comes back after it.
+	const epoch = account_epoch;
+	const keep = (bag) => {
+		if (epoch !== account_epoch) return vault_bag === undefined ? null : vault_bag;
+		vault_bag = bag;
+		return bag;
+	};
 	const nodeFs = getFs(prompt);
 	const file = vaultFile();
 	if (!nodeFs || !file || !nodeFs.existsSync(file)) return (vault_bag = null);
@@ -2388,15 +2417,48 @@ async function readVault(prompt) {
 	} catch (error) {
 		// Refused means a file that can never be opened here: another account's, another
 		// system's, or damaged. Not answering means it may be fine and couldn't be opened today.
-		if (error.kind === 'vault_refused') return (vault_bag = null);
+		if (error.kind === 'vault_refused') return keep(null);
 		throw error;
 	}
+	let bag = null;
 	try {
-		vault_bag = JSON.parse(fromUtf8(base64ToBytes(plain)));
+		bag = JSON.parse(fromUtf8(base64ToBytes(plain)));
 	} catch (error) {
-		vault_bag = null;
+		bag = null;
 	}
-	return vault_bag;
+	return keep(bag);
+}
+
+/*
+ * The saved sign-in, asked for as onload starts (readVaultEarly), so PowerShell, most of a quarter
+ * of a second, runs while the outside tools start from their copies instead of after them. The
+ * team tools' copies came in about 80 ms sooner in the test environment (2026-10-22). Windows
+ * only, and only when Blockbench already lets EmbodyTools read files and run PowerShell without
+ * asking, so onload never shows a prompt. teamStartup takes the answer, once, for the same load
+ * and account (takeEarlyVault); in every other case it reads the file as it always did.
+ */
+let early_vault = null; // { generation, epoch, answer }
+
+function readVaultEarly() {
+	early_vault = null;
+	if (!isDesktop || systemName() !== 'windows' || vault_bag !== undefined || isRefused()) return;
+	let hinted = false;
+	try { hinted = !!localStorage.getItem(SIGNED_IN_KEY); } catch (error) { /* no hint */ }
+	if (!hinted || !getFs(false) || !vaultExists() || !nativeModule('child_process', false)) return;
+	const answer = readVault(false);
+	answer.catch(() => { /* teamStartup takes it, and says what went wrong */ });
+	early_vault = { generation: load_generation, epoch: account_epoch, answer: answer };
+}
+
+function takeEarlyVault() {
+	const kept = early_vault;
+	early_vault = null;
+	if (!kept || kept.generation !== load_generation || kept.epoch !== account_epoch) return null;
+	// Not allowed after all: asked again, with Blockbench's prompt, as the start always asked.
+	return kept.answer.catch((error) => {
+		if (error && error.declined) return readVault(true);
+		throw error;
+	});
 }
 
 async function writeVault(bag) {
@@ -3440,6 +3502,7 @@ const TEAM_TOOL_NAMES = {
 	easyboxuv: 'Easy Box UV',
 	adrullanmodel: 'Adrullan Model',
 	hytale_importer: 'Kweebec Express',
+	parts_prefabs: 'Parts & Prefabs',
 };
 const ON_ITS_OWN = 'Installed on its own in Blockbench';
 // The tools already named in the log as installed on their own, once per start.
@@ -3580,7 +3643,8 @@ async function teamStartup(start) {
 	}
 	let bag;
 	try {
-		bag = await readVault(true);
+		// Usually read already, from onload on (readVaultEarly).
+		bag = await (takeEarlyVault() || readVault(true));
 	} catch (error) {
 		complain('could not read the saved sign-in', error);
 		setTeamState('vault_error', vaultTrouble(error));
@@ -3634,8 +3698,11 @@ async function startTeamFromCopies(generation) {
 		&& !installedOnItsOwn(descriptor.id));
 	if (!wanted.length || !team.key || isRefused()) return false;
 	let copies;
+	let read_epoch;
 	try {
 		if (!withinGrace(await readLastCheck())) return false;
+		// The store these copies were read from, so a wipe since then is noticed (sameAsTeamCopy).
+		read_epoch = copies_epoch;
 		copies = await Promise.all(wanted.map((descriptor) => readCopy(descriptor.id)));
 	} catch (error) {
 		grumble('could not read the copies of the team tools', error);
@@ -3653,6 +3720,8 @@ async function startTeamFromCopies(generation) {
 				if (live.has(descriptor.id) || !readEnabled().has(descriptor.id)) return;
 				loadModule(descriptor, { source: copy.source, origin: 'copy', native: copy.native === true, beforeCheckIn: true });
 				const entry = live.get(descriptor.id);
+				// What it was read as, so the same file from the service isn't stored over it again.
+				if (entry) Object.assign(entry, { copy_epoch: read_epoch, copy_branch: copy.branch || null });
 				if (entry && entry.status === 'on') started.push(descriptor.name || descriptor.id);
 			});
 		});
@@ -3698,7 +3767,7 @@ async function refreshTeamCopies(generation) {
 		}
 		let fetched;
 		try {
-			fetched = await fetchTeamSource(descriptor);
+			fetched = await fetchTeamSource(descriptor, entry);
 		} catch (error) {
 			// Refused: gone already, with every other team tool. Signed in again needed: it goes
 			// too, as it couldn't have loaded. Anything else: the copy carries on.
@@ -3817,9 +3886,22 @@ function takeTeamRequest(id, branch) {
 	return teamRequestUsable(kept, branch) ? kept.answer : null;
 }
 
+/*
+ * The sealed copy a team tool started from at this start (startTeamFromCopies) is the service's
+ * file, and still stored: the same text, branch and file access, and no wipe since it was read (a
+ * sign-out, a refusal or a new key empties the store and bumps copies_epoch). Then sealing and
+ * storing it again would only write the same copy over itself, which every start used to do for
+ * every team tool (David, 2026-10-22).
+ */
+function sameAsTeamCopy(running, source, native, branch) {
+	return !!running && running.copy_epoch === copies_epoch && typeof running.source === 'string'
+		&& running.source === source && running.native === native && running.copy_branch === (branch || null);
+}
+
 // Where a team tool's code comes from: the service, or when it can't be reached, the copy.
-// Either way from the branch picked on its card, or its default.
-async function fetchTeamSource(descriptor) {
+// Either way from the branch picked on its card, or its default. `running`: the tool's entry when
+// it started from its copy at this start, which isn't stored again if it's the same (sameAsTeamCopy).
+async function fetchTeamSource(descriptor, running) {
 	let failed = null;
 	const branch = chosenBranch(descriptor.id);
 	if (team.state === 'online') {
@@ -3827,7 +3909,9 @@ async function fetchTeamSource(descriptor) {
 			const source = await (takeTeamRequest(descriptor.id, branch)
 				|| serviceRequest(teamToolPath(descriptor.id, branch), 'text'));
 			if (!source || !source.trim()) throw new Error('the access service sent an empty file');
-			await saveCopy(descriptor.id, source, descriptor.native, branch);
+			if (!sameAsTeamCopy(running, source, descriptor.native === true, branch)) {
+				await saveCopy(descriptor.id, source, descriptor.native, branch);
+			}
 			return { source: source, origin: 'service', native: descriptor.native === true };
 		} catch (error) {
 			if (error.kind === 'refused') {
@@ -6326,6 +6410,57 @@ function stayIdle(other) {
 	} catch (error) { /* the line in the log says it too */ }
 }
 
+/*
+ * Blockbench 5.2 dropped EmbodyTools after one start without internet (David, 2026-10-23). For a
+ * plugin installed from a link, a start that can't download it runs the copy Blockbench keeps in
+ * its plugins folder (loadFromURL, then load), but never gives the plugin its link (`path` stays
+ * ''), and load() then saves its install record with that empty path. The next start drops a link
+ * install with no path, without a word, so EmbodyTools is gone until someone installs it again.
+ * onload runs inside that load(), before it saves the record, while the record still has the
+ * link: so the plugin gets its link back here (keepInstallLink), and the record keeps it. The
+ * start's timer looks at the record once more (keepInstallRecord), in case Blockbench saves it
+ * in another order. Only EmbodyTools' own record, only an https link it already had, and nothing
+ * is ever added to or taken off Blockbench's list.
+ */
+let install_link = null;
+
+function ownInstallRecord() {
+	if (typeof Plugins === 'undefined' || !Plugins || !Array.isArray(Plugins.installed)) return null;
+	return Plugins.installed.find((entry) => entry && typeof entry === 'object' && entry.id === PLUGIN_ID) || null;
+}
+
+function isInstallLink(link) {
+	return typeof link === 'string' && /^https:\/\/\S+$/i.test(link);
+}
+
+function keepInstallLink() {
+	try {
+		const record = ownInstallRecord();
+		if (!record || record.source !== 'url') return;
+		if (isInstallLink(record.path)) install_link = record.path;
+		const plugin = Plugins.registered && Plugins.registered[PLUGIN_ID];
+		if (plugin && typeof plugin === 'object' && plugin.source === 'url' && !plugin.path && install_link) {
+			plugin.path = install_link;
+		}
+	} catch (error) {
+		grumble('could not look at how EmbodyTools is installed', error);
+	}
+}
+
+function keepInstallRecord() {
+	try {
+		const record = ownInstallRecord();
+		if (!record || record.source !== 'url' || record.path || !install_link) return;
+		record.path = install_link;
+		if (typeof StateMemory !== 'undefined' && StateMemory && typeof StateMemory.save === 'function') {
+			StateMemory.save('installed_plugins');
+		}
+		grumble('Blockbench had lost the link EmbodyTools is installed from (a start without internet), so it was put back');
+	} catch (error) {
+		grumble('could not keep the link EmbodyTools is installed from', error);
+	}
+}
+
 const registrar = (typeof BBPlugin !== 'undefined') ? BBPlugin : Plugin;
 
 registrar.register(PLUGIN_ID, {
@@ -6340,6 +6475,8 @@ registrar.register(PLUGIN_ID, {
 	min_version: '5.0.5',
 
 	onload() {
+		// First, even for a copy that stays idle: Blockbench saves the install record right after.
+		keepInstallLink();
 		const other = otherCopyRunning();
 		if (other) {
 			stayIdle(other);
@@ -6406,7 +6543,18 @@ registrar.register(PLUGIN_ID, {
 		loader.ctx.cleanup('requests made early', () => {
 			early_requests.clear();
 			team_requests.clear();
+			early_vault = null;
 		});
+
+		// The saved sign-in, read while the outside tools start from their copies below, so the team
+		// tools can start from theirs sooner (readVaultEarly). Anything wrong here leaves it to
+		// teamStartup, as before.
+		try {
+			readVaultEarly();
+		} catch (error) {
+			early_vault = null;
+			grumble('could not start reading the saved sign-in early', error);
+		}
 
 		// The outside tools with a copy on disk, from it, now, before Blockbench opens any model,
 		// and the team tools from theirs as soon as the saved sign-in is read (teamStartup). Not
@@ -6435,6 +6583,8 @@ registrar.register(PLUGIN_ID, {
 		setTimeout(async () => {
 			// Switched off before this ran: nothing of this start goes on.
 			if (!current()) return;
+			// The link EmbodyTools is installed from, if Blockbench saved its record without it.
+			keepInstallRecord();
 			// EmbodyTools' own old folder, from earlier versions. Plugins installed in
 			// Blockbench are never touched.
 			try {

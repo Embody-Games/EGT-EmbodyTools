@@ -2,6 +2,20 @@
 
 Generated from `changelog.json` by `scripts/changelog.mjs`. Edit that file, not this one.
 
+## v3.6.1 - Stays installed when you're offline
+
+_2026-10-23_
+
+### Changed
+
+- When you're signed in, the team's tools are ready a little sooner after Blockbench opens.
+- When a tool hasn't changed, EmbodyTools no longer saves it again every time Blockbench opens, so there's less work at the start.
+- Parts & Prefabs shows on the Tools tab before your first sign-in, like the other team tools.
+
+### Fixed
+
+- If Blockbench opened without internet, EmbodyTools could disappear from File > Plugins the next time you opened or refreshed Blockbench, and you had to install it again. Now it stays installed.
+
 ## v3.6.0 - Tools ready as soon as Blockbench opens
 
 _2026-10-20_

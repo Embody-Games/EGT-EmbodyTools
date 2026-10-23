@@ -1,4 +1,25 @@
 {
+	"3.6.1": {
+		"title": "Stays installed when you're offline",
+		"author": "Embody Games",
+		"date": "2026-10-23",
+		"categories": [
+			{
+				"title": "Changed",
+				"list": [
+					"When you're signed in, the team's tools are ready a little sooner after Blockbench opens.",
+					"When a tool hasn't changed, EmbodyTools no longer saves it again every time Blockbench opens, so there's less work at the start.",
+					"Parts & Prefabs shows on the Tools tab before your first sign-in, like the other team tools."
+				]
+			},
+			{
+				"title": "Fixed",
+				"list": [
+					"If Blockbench opened without internet, EmbodyTools could disappear from File > Plugins the next time you opened or refreshed Blockbench, and you had to install it again. Now it stays installed."
+				]
+			}
+		]
+	},
 	"3.6.0": {
 		"title": "Tools ready as soon as Blockbench opens",
 		"author": "Embody Games",
