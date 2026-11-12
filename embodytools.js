@@ -48,7 +48,7 @@ const PLUGIN_ID = 'embodytools';
 // Bumped on every deploy during testing, so the plugin page shows at a glance whether the
 // running copy is the latest file. If the page does not say this number, Blockbench is
 // reading some other file.
-const PLUGIN_VERSION = '3.6.1';
+const PLUGIN_VERSION = '3.7.0';
 const TAG = '[embodytools]';
 
 /*
@@ -1310,6 +1310,8 @@ async function loadModule(descriptor, given) {
 		// What the team shares through this tool (sharedStore). Only a team tool gets it: it acts as
 		// the person signed in, which no outside tool, or one added on this computer, ever may.
 		if (descriptor.team) created.ctx.shared = sharedStore(descriptor.id, created.ctx);
+		// Its own GitHub repo (repoStore), for a team tool the service keeps one for. The same rule.
+		if (descriptor.team) created.ctx.repo = repoStore(descriptor.id, created.ctx);
 		const module = evaluateModule(fetched.source, created.ctx, effective, record);
 		// Only a plugin needs it.
 		if (module.kind !== 'plugin') forgetPlugin(record);
@@ -2859,6 +2861,128 @@ function sharedStore(tool, ctx) {
 	});
 }
 
+// ---- a team tool's own GitHub repo (ctx.repo) --------------------------------------------------
+
+/*
+ * A team tool's own repo on GitHub, reached through the service's /v1/repo/<its id>: Embody
+ * Timelapse pushes every recording there, a folder per recording, so nobody needs git. The
+ * service writes it with a GitHub App that can touch only that repo; the calls go as the person
+ * signed in, with the ID token added here, so the tool never sees the token and can't reach any
+ * other route or another tool's repo.
+ *
+ * upload(bytes) sends a file's bytes as a git blob and resolves to { sha }; push(request) commits
+ * blobs already sent into the recording's folder and resolves to { folder, commit }; read(folder,
+ * file) resolves to the file's bytes. A failure rejects with an Error whose `code` says what to
+ * tell the person: signed_out, offline, refused, unavailable (a service from before repos, or one
+ * with no repo for this tool yet), not_in_repo, too_large, bad_request, rate_limited, or unloaded
+ * once the tool has been switched off. Like ctx.shared, a refusal here changes nothing by itself.
+ */
+const REPO_CODES = {
+	not_found: 'unavailable',
+	unknown_space: 'unavailable',
+	not_in_repo: 'not_in_repo',
+	too_large: 'too_large',
+	bad_request: 'bad_request',
+	rate_limited: 'rate_limited',
+};
+// A part is up to 10 MB: two minutes covers a slow connection.
+const REPO_TIMEOUT_MS = 120000;
+
+// Big byte arrays as base64 without building the string one character at a time.
+function bytesToBase64Fast(bytes) {
+	const chunks = [];
+	for (let i = 0; i < bytes.length; i += 0x8000) chunks.push(String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000)));
+	return btoa(chunks.join(''));
+}
+
+async function repoRequest(tool, method, path, body, asBytes) {
+	const url = SERVICE_URL + '/v1/repo/' + encodeURIComponent(tool) + path;
+	for (let attempt = 0; attempt < 2; attempt++) {
+		let token;
+		try {
+			token = await ensureIdToken(attempt > 0);
+		} catch (error) {
+			if (error.kind === 'refused' || error.kind === 'offline') throw sharedError(error.kind, error.message);
+			throw sharedError('signed_out', error.message);
+		}
+		const headers = { Authorization: 'Bearer ' + token };
+		const options = { method: method, headers: headers };
+		if (body !== undefined) {
+			headers['Content-Type'] = 'application/json';
+			options.body = body;
+		}
+		if (!nativeFetch) throw sharedError('offline', 'no network here');
+		const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+		if (controller) options.signal = controller.signal;
+		const timer = setTimeout(() => { if (controller) controller.abort(); }, REPO_TIMEOUT_MS);
+		let status;
+		let text = null;
+		let bytes = null;
+		try {
+			const response = await nativeFetch(url, options);
+			status = response.status;
+			if (response.ok && asBytes) {
+				bytes = typeof response.arrayBuffer === 'function'
+					? new Uint8Array(await response.arrayBuffer())
+					: utf8(await response.text());
+			} else text = await response.text();
+		} catch (error) {
+			throw sharedError('offline', 'could not reach the access service: ' + (error && error.message || error));
+		} finally {
+			clearTimeout(timer);
+		}
+		if (bytes) return bytes;
+		const answer = parseJson(text);
+		if (status === 401 && answer && answer.status) {
+			if (attempt === 0) continue;
+			throw sharedError('signed_out', 'the access service did not accept a fresh sign-in');
+		}
+		if (status === 403 && refusalIn(answer)) throw sharedError('refused', 'the access service refused: ' + answer.status);
+		if (status >= 200 && status < 300 && answer && typeof answer === 'object') return answer;
+		const code = answer && typeof answer.error === 'string' && Object.prototype.hasOwnProperty.call(REPO_CODES, answer.error)
+			? REPO_CODES[answer.error] : null;
+		if (code) throw sharedError(code, answer.error + (typeof answer.reason === 'string' ? ': ' + answer.reason : ''));
+		throw sharedError('offline', 'the access service answered ' + status);
+	}
+	throw sharedError('signed_out', 'the access service did not accept a fresh sign-in');
+}
+
+/*
+ * ctx.repo for a team tool: upload(bytes), push(request) and read(folder, file). Only the
+ * fields the service knows are sent on, and a folder or file name only ever as one part of the
+ * path. Switching the tool off closes it, as ctx.shared is closed.
+ */
+function repoStore(tool, ctx) {
+	let open = true;
+	ctx.cleanup('repo of ' + tool, () => { open = false; });
+	const closed = () => Promise.reject(sharedError('unloaded', tool + ' is switched off'));
+	const pick = (from, names) => {
+		const out = {};
+		if (from && typeof from === 'object') for (const name of names) if (from[name] !== undefined) out[name] = from[name];
+		return out;
+	};
+	return Object.freeze({
+		upload(data) {
+			if (!open) return closed();
+			const bytes = data instanceof Uint8Array ? data : data instanceof ArrayBuffer ? new Uint8Array(data) : null;
+			if (!bytes) return Promise.reject(sharedError('bad_request', 'upload takes a Uint8Array or an ArrayBuffer'));
+			// GitHub's own JSON for a blob, which the service passes on without reading it.
+			return repoRequest(tool, 'POST', '/blobs', '{"encoding":"base64","content":"' + bytesToBase64Fast(bytes) + '"}');
+		},
+		push(request) {
+			if (!open) return closed();
+			const out = pick(request, ['id', 'name', 'folder', 'message']);
+			out.files = Array.isArray(request && request.files) ? request.files.map((file) => pick(file, ['name', 'sha'])) : [];
+			out.manifest = pick(request && request.manifest, ['snapshots', 'created', 'updated', 'parts', 'edit', 'preview', 'tool']);
+			return repoRequest(tool, 'POST', '/push', JSON.stringify(out));
+		},
+		read(folder, file) {
+			if (!open) return closed();
+			return repoRequest(tool, 'GET', '/files/' + encodeURIComponent(String(folder)) + '/' + encodeURIComponent(String(file)), undefined, true);
+		},
+	});
+}
+
 // The key for the offline copies. Copies under an earlier key are useless, so they go.
 async function fetchOfflineKey() {
 	const body = await serviceRequest('/v1/key');
@@ -3503,6 +3627,7 @@ const TEAM_TOOL_NAMES = {
 	adrullanmodel: 'Adrullan Model',
 	hytale_importer: 'Kweebec Express',
 	parts_prefabs: 'Parts & Prefabs',
+	embody_timelapse: 'Embody Timelapse',
 };
 const ON_ITS_OWN = 'Installed on its own in Blockbench';
 // The tools already named in the log as installed on their own, once per start.

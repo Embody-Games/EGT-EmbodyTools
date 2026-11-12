@@ -2,6 +2,16 @@
 
 Generated from `changelog.json` by `scripts/changelog.mjs`. Edit that file, not this one.
 
+## v3.7.0 - Ready for timelapses in the team repo
+
+_2026-11-12_
+
+### Added
+
+- Team tools can now save files to the team's GitHub for you, through your Embody sign-in. You don't need git or a GitHub account.
+- Embody Timelapse will use this to keep everyone's timelapses together in one place, once its next version is out.
+- Before you sign in for the first time, the Tools tab lists Embody Timelapse with the other team tools.
+
 ## v3.6.1 - Stays installed when you're offline
 
 _2026-10-23_
